@@ -236,6 +236,7 @@ function collectPyAudit(counts) {
     const tmp = path.join(process.env.TMPDIR || "/tmp", `bw-req-${process.pid}.txt`);
     if (run(`uv export --format requirements-txt --no-emit-project -o "${tmp}"`).code === 0) src = `-r "${tmp}"`;
   }
+  if (!src) die("nothing to audit against: add requirements.txt or a uv lockfile — auditing an unrelated environment would report the wrong repo");
   console.log(`→ ${tool} -f json ${src}`.trim());
   const audit = run(`${tool} -f json ${src}`);
   let report;

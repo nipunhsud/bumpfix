@@ -78,6 +78,23 @@ bumpwright lodash --agent "claude -p --permission-mode acceptEdits"
 bumpwright lodash --agent "codex exec --full-auto -"
 ```
 
+## Python projects
+
+The same loop works on Python. In a directory with `pyproject.toml` or
+`requirements.txt` (and no `package.json`):
+
+```
+bumpwright requests@2.32.5 --test pytest
+```
+
+- `uv` projects: upgraded via `uv add` / `uv lock --upgrade-package` + `uv sync`
+- pip projects: installed into the active environment and `requirements.txt`
+  is rewritten to match, so the manifest stays truthful
+- Default gate is `pytest`; pass `--test` for anything else
+- Same guardrails: clean tree, green baseline required, own branch, red never ships
+
+`audit` for Python (pip-audit) is next on the roadmap; today audit mode is npm-only.
+
 ## Security mode: `bumpwright audit`
 
 The vulnerabilities nobody patches are the ones where the fix needs a breaking

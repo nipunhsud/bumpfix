@@ -30,7 +30,7 @@ function run(cmd, opts = {}) {
 function die(msg) { console.error(`bumpwright: ${msg}`); process.exit(1); }
 
 function parseArgs(argv) {
-  const pm = detectPm();
+  const pm = isPython() ? { install: "(py)", test: "pytest", sync: pyUsesUv() ? "uv sync" : (fs.existsSync("requirements.txt") ? "python3 -m pip install -r requirements.txt" : "true"), py: true } : detectPm();
   const a = { pm, test: pm.test, agent: "claude -p --permission-mode acceptEdits", maxIters: 3, pr: false, branch: true };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +51,30 @@ function parseArgs(argv) {
   if (!/^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(a.pkg)) die(`invalid package name: ${a.pkg}`);
   if (!/^[\w.^~<>=*|+ -]+$/.test(a.version)) die(`invalid version spec: ${a.version}`);
   return a;
+}
+
+function isPython() {
+  return !fs.existsSync("package.json") && (fs.existsSync("pyproject.toml") || fs.existsSync("requirements.txt"));
+}
+function pyUsesUv() { return fs.existsSync("uv.lock") || (fs.existsSync("pyproject.toml") && run("command -v uv").code === 0); }
+function pyCurrentVersion(pkg) {
+  const show = run(pyUsesUv() ? `uv pip show "${pkg}"` : `python3 -m pip show "${pkg}"`);
+  const m = show.out.match(/^Version: (.+)$/m);
+  return m ? m[1].trim() : null;
+}
+function pyInstallCmd(pkg, version) {
+  if (pyUsesUv())
+    return version === "latest" ? `uv lock --upgrade-package "${pkg}" && uv sync` : `uv add "${pkg}==${version}"`;
+  const spec = version === "latest" ? `-U "${pkg}"` : `"${pkg}==${version}"`;
+  return `python3 -m pip install ${spec}`;
+}
+function pyRecordRequirement(pkg, newVersion) {
+  // pip has no manifest write; keep requirements.txt truthful ourselves.
+  if (!fs.existsSync("requirements.txt")) return;
+  const esc = pkg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${esc}\\s*[=<>~!].*$`, "mi");
+  const txt = fs.readFileSync("requirements.txt", "utf8");
+  if (re.test(txt)) fs.writeFileSync("requirements.txt", txt.replace(re, `${pkg}==${newVersion}`));
 }
 
 function detectPm() {
@@ -166,11 +190,11 @@ function main() {
   if (process.argv[2] === "audit") return auditMode(process.argv.slice(3));
   const a = parseArgs(process.argv.slice(2));
 
-  if (!fs.existsSync("package.json")) die("no package.json here — run from your project root");
+  if (!fs.existsSync("package.json") && !isPython()) die("no package.json, pyproject.toml, or requirements.txt here — run from your project root");
   if (run("git rev-parse --is-inside-work-tree").code !== 0) die("not a git repository");
   if (run("git status --porcelain").out.trim() !== "") die("working tree not clean — commit or stash first");
 
-  if (!a.testExplicit) {
+  if (!a.testExplicit && !a.pm.py) {
     const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
     const t = pj.scripts && pj.scripts.test;
     if ((!t || /no test specified/i.test(t)) && pj.scripts && pj.scripts.build) {
@@ -186,9 +210,9 @@ function main() {
     die(`the gate "${a.test}" is already red before any upgrade — fix that first, or pass a working --test`);
   }
 
-  const targets = a.workspaces ? workspaceDirs(a.pkg) : ["."];
-  if (a.workspaces) console.log(`→ workspaces declaring ${a.pkg}: ${targets.join(", ")}`);
-  const oldVersion = currentVersion(a.pkg, targets[0]) || "(not yet a dependency)";
+  const targets = a.workspaces && !a.pm.py ? workspaceDirs(a.pkg) : ["."];
+  if (a.workspaces && !a.pm.py) console.log(`→ workspaces declaring ${a.pkg}: ${targets.join(", ")}`);
+  const oldVersion = (a.pm.py ? pyCurrentVersion(a.pkg) : currentVersion(a.pkg, targets[0])) || "(not yet a dependency)";
   const branch = "bumpwright/" + `${a.pkg}-${a.version}`.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+/, "");
   if (a.branch) {
     if (run(`git checkout -b "${branch}"`).code !== 0) die(`could not create branch ${branch} (already exists?)`);
@@ -196,6 +220,13 @@ function main() {
   }
 
   const specs = [`${a.pkg}@${a.version}`];
+  if (a.pm.py) {
+    const cmd = pyInstallCmd(a.pkg, a.version);
+    console.log(`→ ${cmd}`);
+    const inst = run(cmd);
+    if (inst.code !== 0) { console.error(inst.out.slice(-3000)); die("install failed"); }
+    pyRecordRequirement(a.pkg, pyCurrentVersion(a.pkg) || a.version);
+  } else
   for (const dir of targets) {
     for (;;) {
       const cmd = dir === "." ? a.pm.install : a.pm.install.replace(/ -w$/, "");
@@ -214,7 +245,7 @@ function main() {
       specs.push(companion);
     }
   }
-  const newVersion = currentVersion(a.pkg, targets[0]) || a.version;
+  const newVersion = (a.pm.py ? pyCurrentVersion(a.pkg) : currentVersion(a.pkg, targets[0])) || a.version;
 
   let result = null;
   for (let i = 0; i <= a.maxIters; i++) {

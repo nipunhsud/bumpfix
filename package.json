@@ -1,6 +1,6 @@
 {
   "name": "bumpfix",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Upgrade a dependency, then fix the breaking changes — not just the version number. Dependabot bumps; bumpfix migrates.",
   "bin": {
     "bumpfix": "bin/bumpfix.js",

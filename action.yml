@@ -1,4 +1,4 @@
-name: bumpfix
+name: Bumpfix Upgrade Agent
 description: Upgrade a dependency and migrate breaking changes behind your test gate, then open a green PR
 branding: { icon: git-pull-request, color: green }
 inputs:

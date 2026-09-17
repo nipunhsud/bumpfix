@@ -8,7 +8,13 @@ trap 'rm -rf "$TMP"' EXIT
 # 1. No test script + build script present -> build becomes the gate.
 mkdir "$TMP/gate" && cd "$TMP/gate"
 git init -q -b main && git config user.email t@t && git config user.name t
-printf '{ "name":"g","private":true,"dependencies":{"isarray":"1.0.0"},"scripts":{"build":"test -f fixed.txt"} }' > package.json
+printf '{ "name":"g","private":true,"dependencies":{"isarray":"1.0.0"},"scripts":{"build":"bash check.sh"} }' > package.json
+cat > check.sh <<'CHK'
+#!/usr/bin/env bash
+v=$(node -p "require('isarray/package.json').version")
+case "$v" in 1.*) exit 0;; esac
+test -f fixed.txt
+CHK
 npm install --silent >/dev/null 2>&1
 printf '#!/usr/bin/env bash\ntouch fixed.txt\n' > agent.sh && chmod +x agent.sh
 git add -A && git commit -qm init
@@ -54,3 +60,14 @@ git log "$BR" -1 --pretty=%B | grep -q "Security: fixes" || { echo "FAIL: adviso
 git show "$BR:package.json" | grep -Eq '"minimist": ?"\^?1' || { echo "FAIL: minimist not on 1.x"; exit 1; }
 
 echo "AUDIT OK"
+
+# 5. Baseline gate red -> refuse to start, touch nothing.
+mkdir "$TMP/red" && cd "$TMP/red"
+git init -q -b main && git config user.email t@t && git config user.name t
+printf '{ "name":"r","private":true,"dependencies":{"isarray":"1.0.0"},"scripts":{"test":"exit 1"} }' > package.json
+npm install --silent >/dev/null 2>&1 && git add -A && git commit -qm init
+if node "$BUMPFIX" isarray@2.0.5 2>/dev/null; then echo "FAIL: red baseline accepted"; exit 1; fi
+[ -z "$(git status --porcelain)" ] || { echo "FAIL: red baseline dirtied tree"; exit 1; }
+git branch --list 'bumpfix/*' | grep -q . && { echo "FAIL: branch created despite red baseline"; exit 1; }
+
+echo "BASELINE OK"

@@ -12,8 +12,14 @@ git config user.email t@t && git config user.name t
 cat > package.json <<'PKG'
 { "name": "fixture", "version": "1.0.0", "private": true,
   "dependencies": { "isarray": "1.0.0" },
-  "scripts": { "test": "test -f fixed.txt" } }
+  "scripts": { "test": "bash check.sh" } }
 PKG
+cat > check.sh <<'CHK'
+#!/usr/bin/env bash
+v=$(node -p "require('isarray/package.json').version")
+case "$v" in 1.*) exit 0;; esac
+test -f fixed.txt
+CHK
 npm install --silent >/dev/null 2>&1
 # Fake agent: verifies the prompt arrived on stdin, then "fixes" the code.
 cat > agent.sh <<'AGENT'

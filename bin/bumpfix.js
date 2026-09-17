@@ -128,7 +128,8 @@ function auditMode(argv) {
     const env = { ...process.env, BUMPFIX_NOTE: `Security: fixes ${[...new Set(info.advisories)].join(", ")}` };
     const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env });
     if ((r.status ?? 1) !== 0) failed++;
-    run(`git checkout "${start}"`); // each upgrade branches from the starting point, not from the previous branch
+    run(`git checkout -f "${start}"`); // back to the starting point...
+    run("git checkout -- ."); // ...and drop any residue a failed child left, so the next target starts clean
   }
   console.log(failed ? `\n✗ ${failed}/${majors.size} security upgrades did not reach green` : `\n✓ all ${majors.size} security upgrades green`);
   process.exit(failed ? 1 : 0);
@@ -149,6 +150,13 @@ function main() {
       a.test = `${a.pm.test.split(" ")[0]} run build`;
       console.log(`→ no test script; using the build as the gate: ${a.test}`);
     }
+  }
+
+  console.log(`→ baseline: ${a.test}`);
+  const baseline = run(a.test);
+  if (baseline.code !== 0) {
+    console.error(baseline.out.slice(-2000));
+    die(`the gate "${a.test}" is already red before any upgrade — fix that first, or pass a working --test`);
   }
 
   const targets = a.workspaces ? workspaceDirs(a.pkg) : ["."];

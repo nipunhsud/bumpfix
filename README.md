@@ -73,3 +73,29 @@ bumpfix lodash --agent "codex exec --full-auto -"
 ## License
 
 MIT
+
+## Use with LLM coding tools
+
+**Claude Code (or any agent with a shell):** no integration needed. Install
+bumpfix on your PATH and add one line to your project's `CLAUDE.md`:
+
+```
+For dependency upgrades, run `bumpfix <pkg>@<version>` instead of hand-migrating.
+```
+
+**MCP (Claude Desktop, Cursor, and other no-shell clients):** bumpfix ships a
+zero-dependency MCP stdio server exposing one tool, `upgrade_dependency`.
+
+```
+claude mcp add bumpfix -- bumpfix-mcp
+```
+
+Or in any MCP client config:
+
+```json
+{ "mcpServers": { "bumpfix": { "command": "bumpfix-mcp" } } }
+```
+
+The tool takes `package`, `cwd` (absolute project path), and optionally
+`version`, `test`, `agent`, `max_iters`, `pr`. Same guardrails as the CLI:
+clean tree required, own branch, red tests never ship.

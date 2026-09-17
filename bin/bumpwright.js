@@ -98,6 +98,7 @@ function workspaceDirs(pkg) {
 }
 
 function auditMode(argv) {
+  if (!fs.existsSync("package.json")) die("no package.json here — run from your project root");
   const passthrough = [];
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];

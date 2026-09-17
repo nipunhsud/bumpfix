@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const HELP = `bumpfix <package>[@version] [options]
+       bumpfix audit [options]      Fix every vulnerability that needs a breaking upgrade
 
 Upgrades an npm dependency, runs your tests, and if they break, drives a
 coding agent to migrate your calling code until they pass again.
@@ -96,7 +97,45 @@ function workspaceDirs(pkg) {
   return dirs.length ? dirs : ["."];
 }
 
+function auditMode(argv) {
+  const passthrough = [];
+  for (let i = 0; i < argv.length; i++) {
+    const v = argv[i];
+    if (["--test", "--agent", "--max-iters"].includes(v)) passthrough.push(v, argv[++i]);
+    else if (["--pr", "--no-branch", "--workspaces"].includes(v)) passthrough.push(v);
+  }
+  console.log("→ npm audit --json");
+  const audit = run("npm audit --json");
+  let report;
+  try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"))); } catch { die("could not parse npm audit output"); }
+  const majors = new Map();
+  let fixable = 0;
+  for (const v of Object.values(report.vulnerabilities || {})) {
+    const f = v.fixAvailable;
+    if (!f) continue;
+    if (f === true || !f.isSemVerMajor) { fixable++; continue; }
+    const via = (v.via || []).filter((x) => typeof x === "object");
+    const cur = majors.get(f.name) || { version: f.version, severity: v.severity, advisories: [] };
+    cur.advisories.push(...via.map((x) => x.url || x.title || v.name));
+    majors.set(f.name, cur);
+  }
+  if (fixable) console.log(`→ ${fixable} finding(s) fixable without a major bump — run \`npm audit fix\` for those`);
+  if (!majors.size) { console.log("✓ no vulnerabilities need a breaking upgrade"); process.exit(0); }
+  const start = run("git rev-parse --abbrev-ref HEAD").out.trim();
+  let failed = 0;
+  for (const [name, info] of majors) {
+    console.log(`\n=== ${name}@${info.version} — security (${info.severity}) ===`);
+    const env = { ...process.env, BUMPFIX_NOTE: `Security: fixes ${[...new Set(info.advisories)].join(", ")}` };
+    const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env });
+    if ((r.status ?? 1) !== 0) failed++;
+    run(`git checkout "${start}"`); // each upgrade branches from the starting point, not from the previous branch
+  }
+  console.log(failed ? `\n✗ ${failed}/${majors.size} security upgrades did not reach green` : `\n✓ all ${majors.size} security upgrades green`);
+  process.exit(failed ? 1 : 0);
+}
+
 function main() {
+  if (process.argv[2] === "audit") return auditMode(process.argv.slice(3));
   const a = parseArgs(process.argv.slice(2));
 
   if (!fs.existsSync("package.json")) die("no package.json here — run from your project root");
@@ -172,7 +211,8 @@ ${result.out.slice(-8000)}`;
 
   console.log("✓ tests passing");
   run("git add -A");
-  const msg = `Upgrade ${a.pkg} ${oldVersion} -> ${newVersion} and migrate breaking changes\n\nAutomated by bumpfix.`;
+  const note = process.env.BUMPFIX_NOTE ? `${process.env.BUMPFIX_NOTE}\n\n` : "";
+  const msg = `Upgrade ${a.pkg} ${oldVersion} -> ${newVersion} and migrate breaking changes\n\n${note}Automated by bumpfix.`;
   if (run(`git commit -m "${msg.replace(/"/g, '\\"')}"`).code !== 0) die("git commit failed");
   console.log(`✓ committed upgrade of ${a.pkg} to ${newVersion}`);
 

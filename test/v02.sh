@@ -38,3 +38,19 @@ echo "$OUT" | grep -q "retrying with companion @types/node@^2" || { echo "FAIL: 
 grep -Eq '"@types/node": ?"\^2' package.json || { echo "FAIL: companion not bumped"; exit 1; }
 
 echo "V02 OK"
+
+# 4. bumpfix audit: a vuln whose fix is a major bump gets its own green branch
+#    with the advisory in the commit (live npm audit against minimist 0.0.8).
+mkdir "$TMP/audit" && cd "$TMP/audit"
+git init -q -b main && git config user.email t@t && git config user.name t
+printf '{ "name":"v","private":true,"dependencies":{"minimist":"0.0.8"},"scripts":{"test":"exit 0"} }' > package.json
+npm install --silent >/dev/null 2>&1 || true
+git add -A && git commit -qm init
+OUT=$(node "$BUMPFIX" audit 2>&1) || { echo "$OUT" | tail -5; echo "FAIL: audit run failed"; exit 1; }
+echo "$OUT" | grep -q "security" || { echo "FAIL: no security section"; exit 1; }
+BR=$(git branch --list 'bumpfix/minimist-*' --format='%(refname:short)' | head -1)
+[ -n "$BR" ] || { echo "FAIL: no audit branch created"; exit 1; }
+git log "$BR" -1 --pretty=%B | grep -q "Security: fixes" || { echo "FAIL: advisory not in commit"; exit 1; }
+git show "$BR:package.json" | grep -Eq '"minimist": ?"\^?1' || { echo "FAIL: minimist not on 1.x"; exit 1; }
+
+echo "AUDIT OK"

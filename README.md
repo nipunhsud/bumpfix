@@ -78,6 +78,30 @@ bumpfix lodash --agent "claude -p --permission-mode acceptEdits"
 bumpfix lodash --agent "codex exec --full-auto -"
 ```
 
+## Security mode: `bumpfix audit`
+
+The vulnerabilities nobody patches are the ones where the fix needs a breaking
+upgrade — `npm audit fix` can't touch them and Dependabot's PR arrives red.
+
+```
+bumpfix audit --pr
+```
+
+Runs `npm audit`, skips everything a plain `npm audit fix` can handle, and for
+each finding whose fix is a semver-major bump it runs the full migrate loop on
+its own branch. The advisory URLs and severity land in the commit and PR body,
+so the PR reads as the security fix it is. Exits non-zero if any upgrade
+couldn't reach green.
+
+Standing service on any repo — daily cron via the Action:
+
+```yaml
+      - uses: nipunhsud/bumpfix@v0.3.0
+        with:
+          package: audit             # security mode
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
 ## GitHub Action (the Dependabot-replacement mode)
 
 Dependabot opens red PRs on a schedule. This opens green ones:
@@ -94,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: nipunhsud/bumpfix@v0.2.0
+      - uses: nipunhsud/bumpfix@v0.3.0
         with:
           package: react@19          # or matrix over several packages
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

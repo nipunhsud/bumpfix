@@ -109,16 +109,33 @@ function auditMode(argv) {
   const audit = run("npm audit --json");
   let report;
   try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"))); } catch { die("could not parse npm audit output"); }
+  const vulns = report.vulnerabilities || {};
+  const advisoriesOf = (v, depth = 0) => {
+    // Advisory URLs often live on the transitive entry a via-string points at.
+    if (!v || depth > 2) return [];
+    return (v.via || []).flatMap((x) =>
+      typeof x === "object" ? [x.url || x.title].filter(Boolean) : advisoriesOf(vulns[x], depth + 1));
+  };
+  const installedMajor = (name) => {
+    try { return parseInt(JSON.parse(fs.readFileSync(path.join("node_modules", name, "package.json"), "utf8")).version, 10); }
+    catch { return null; }
+  };
   const majors = new Map();
-  let fixable = 0;
-  for (const v of Object.values(report.vulnerabilities || {})) {
+  let fixable = 0, downgrades = 0;
+  for (const v of Object.values(vulns)) {
     const f = v.fixAvailable;
     if (!f) continue;
     if (f === true || !f.isSemVerMajor) { fixable++; continue; }
-    const via = (v.via || []).filter((x) => typeof x === "object");
-    const cur = majors.get(f.name) || { version: f.version, severity: v.severity, advisories: [] };
-    cur.advisories.push(...via.map((x) => x.url || x.title || v.name));
-    majors.set(f.name, cur);
+    const cur = installedMajor(f.name);
+    if (cur !== null && parseInt(f.version, 10) < cur) {
+      // npm sometimes proposes an older major as the "fix" — a downgrade PR helps nobody.
+      console.log(`→ skipping ${f.name}: npm proposes a downgrade (${cur}.x -> ${f.version})`);
+      downgrades++;
+      continue;
+    }
+    const entry = majors.get(f.name) || { version: f.version, severity: v.severity, advisories: [] };
+    entry.advisories.push(...advisoriesOf(v));
+    majors.set(f.name, entry);
   }
   if (fixable) console.log(`→ ${fixable} finding(s) fixable without a major bump — run \`npm audit fix\` for those`);
   if (!majors.size) { console.log("✓ no vulnerabilities need a breaking upgrade"); process.exit(0); }
@@ -126,7 +143,8 @@ function auditMode(argv) {
   let failed = 0;
   for (const [name, info] of majors) {
     console.log(`\n=== ${name}@${info.version} — security (${info.severity}) ===`);
-    const env = { ...process.env, BUMPWRIGHT_NOTE: `Security: fixes ${[...new Set(info.advisories)].join(", ")}` };
+    const urls = [...new Set(info.advisories)];
+    const env = { ...process.env, BUMPWRIGHT_NOTE: urls.length ? `Security: fixes ${urls.join(", ")}` : `Security: fixes npm audit finding (${info.severity})` };
     const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env });
     if ((r.status ?? 1) !== 0) failed++;
     run(`git checkout -f "${start}"`); // back to the starting point...

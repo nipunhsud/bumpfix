@@ -116,9 +116,15 @@ function auditMode(argv) {
     return (v.via || []).flatMap((x) =>
       typeof x === "object" ? [x.url || x.title].filter(Boolean) : advisoriesOf(vulns[x], depth + 1));
   };
-  const installedMajor = (name) => {
-    try { return parseInt(JSON.parse(fs.readFileSync(path.join("node_modules", name, "package.json"), "utf8")).version, 10); }
+  const installedVersion = (name) => {
+    try { return JSON.parse(fs.readFileSync(path.join("node_modules", name, "package.json"), "utf8")).version; }
     catch { return null; }
+  };
+  const vtuple = (v) => String(v).split("-")[0].split(".").map((n) => parseInt(n, 10) || 0);
+  const isDowngrade = (fix, cur) => {
+    const [a, b] = [vtuple(fix), vtuple(cur)];
+    for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); }
+    return false;
   };
   const majors = new Map();
   let fixable = 0, downgrades = 0;
@@ -126,10 +132,10 @@ function auditMode(argv) {
     const f = v.fixAvailable;
     if (!f) continue;
     if (f === true || !f.isSemVerMajor) { fixable++; continue; }
-    const cur = installedMajor(f.name);
-    if (cur !== null && parseInt(f.version, 10) < cur) {
-      // npm sometimes proposes an older major as the "fix" — a downgrade PR helps nobody.
-      console.log(`→ skipping ${f.name}: npm proposes a downgrade (${cur}.x -> ${f.version})`);
+    const cur = installedVersion(f.name);
+    if (cur !== null && isDowngrade(f.version, cur)) {
+      // npm sometimes proposes an older version as the "fix" — a downgrade PR helps nobody.
+      console.log(`→ skipping ${f.name}: npm proposes a downgrade (${cur} -> ${f.version})`);
       downgrades++;
       continue;
     }

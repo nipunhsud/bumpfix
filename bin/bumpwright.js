@@ -177,8 +177,8 @@ function directDepDirs() {
     try {
       const pj = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
       for (const k of ["dependencies", "devDependencies"])
-        for (const name of Object.keys(pj[k] || {}))
-          if (!map.has(name)) map.set(name, dir);
+        for (const [name, spec] of Object.entries(pj[k] || {}))
+          if (!map.has(name)) map.set(name, { dir, spec });
     } catch { /* no manifest */ }
   };
   record(".");
@@ -206,6 +206,13 @@ function collectPnpmAudit(counts) {
   for (const adv of Object.values(report.advisories || {})) {
     const name = adv.module_name;
     if (!direct.has(name)) { counts.transitive++; continue; }
+    const spec = String(direct.get(name).spec || "");
+    if (/^(workspace|file|link|portal|git|github):/.test(spec)) {
+      // an internal workspace link or non-registry dep — only an upstream release fixes this
+      console.log(`→ skipping ${name}: ${spec.split(":")[0]}: specifier, not a registry dependency`);
+      counts.transitive++;
+      continue;
+    }
     // Ranges like ">=0.2.4 <1.0.0 || >=1.2.3" patch several lines; target the highest floor.
     const floors = [...String(adv.patched_versions || "").matchAll(/>=\s*([\d.]+)/g)].map((x) => x[1]);
     const m = floors.length ? [null, floors.sort((a, b) => (isDowngrade(a, b) ? -1 : 1)).pop()] : null;
@@ -214,7 +221,7 @@ function collectPnpmAudit(counts) {
     if (cur && isDowngrade(m[1], cur)) { counts.downgrades++; continue; }
     addTarget(majors, name, m[1], adv.severity || "security", [adv.url].filter(Boolean), counts);
     const entry = majors.get(name);
-    if (entry) entry.dir = direct.get(name);
+    if (entry) entry.dir = direct.get(name).dir;
   }
   if (counts.transitive) console.log(`→ ${counts.transitive} finding(s) in transitive deps — out of scope for a direct bump (overrides or upstream)`);
   return majors;

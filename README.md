@@ -45,7 +45,31 @@ bumpfix <package>[@version] [options]
   --max-iters <n>   Max fix attempts (default: 3)
   --pr              Push the branch and open a PR via gh
   --no-branch       Work on the current branch
+  --workspaces      Also bump the package in every workspace subpackage that declares it
 ```
+
+bumpfix also handles the parts that leave Dependabot PRs red or unopened:
+
+- **Companion bumps.** If the install fails on a peer conflict (vite 8 wants a
+  newer `@types/node` than you pin), bumpfix bumps the blocking companion
+  alongside the target and retries, instead of dying like `npm install` does.
+- **No test script?** If `package.json` has a build script but no real test
+  script, the build becomes the red/green gate automatically.
+- **pnpm and yarn** are detected from lockfiles, including from inside a
+  workspace subpackage.
+
+## Why not just ask Claude Code?
+
+You can. Claude Code (or any coding agent) can do everything bumpfix does if
+you prompt it carefully every time. bumpfix is the workflow, hardened:
+
+- The guardrails are code, not prompt text: clean tree required, own branch,
+  red tests never ship, one reviewable commit. An agent freelancing in your
+  repo guarantees none of that.
+- It's one command with zero prompt engineering, and the same command works
+  headless in CI on a schedule — where nobody is typing prompts.
+- It's agent-agnostic: swap Claude Code for Codex or anything else with
+  `--agent` and the workflow doesn't change.
 
 Any agent that reads a prompt on stdin and edits the working directory works:
 

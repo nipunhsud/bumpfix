@@ -15,6 +15,7 @@ Options:
   --agent <cmd>     Agent command, receives the fix prompt on stdin
                     (default: claude -p --permission-mode acceptEdits)
   --max-iters <n>   Max fix attempts (default: 3)
+  --workspaces      Also bump the package in every workspace subpackage that declares it
   --pr              Push the branch and open a PR via gh
   --no-branch       Work on the current branch instead of bumpfix/<pkg>
   -h, --help        Show this help
@@ -33,7 +34,8 @@ function parseArgs(argv) {
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
-    if (v === "--test") a.test = argv[++i];
+    if (v === "--test") { a.test = argv[++i]; a.testExplicit = true; }
+    else if (v === "--workspaces") a.workspaces = true;
     else if (v === "--agent") a.agent = argv[++i];
     else if (v === "--max-iters") { const n = parseInt(argv[++i], 10); a.maxIters = Number.isNaN(n) || n < 0 ? 3 : n; }
     else if (v === "--pr") a.pr = true;
@@ -64,13 +66,34 @@ function detectPm() {
   return { install: "npm install", test: "npm test" };
 }
 
-function currentVersion(pkg) {
+function currentVersion(pkg, dir = ".") {
   try {
-    const pj = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    const pj = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
     for (const k of ["dependencies", "devDependencies", "optionalDependencies"])
       if (pj[k] && pj[k][pkg]) return pj[k][pkg];
   } catch { /* fall through */ }
   return null;
+}
+
+function workspaceDirs(pkg) {
+  const dirs = [];
+  (function walk(d, depth) {
+    if (depth > 4) return;
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const sub = path.join(d, e.name);
+      try {
+        const pj = JSON.parse(fs.readFileSync(path.join(sub, "package.json"), "utf8"));
+        if ((pj.dependencies && pj.dependencies[pkg]) || (pj.devDependencies && pj.devDependencies[pkg]))
+          dirs.push(sub);
+      } catch { /* no or bad package.json */ }
+      walk(sub, depth + 1);
+    }
+  })(".", 1);
+  if (currentVersion(pkg)) dirs.unshift(".");
+  return dirs.length ? dirs : ["."];
 }
 
 function main() {
@@ -80,17 +103,44 @@ function main() {
   if (run("git rev-parse --is-inside-work-tree").code !== 0) die("not a git repository");
   if (run("git status --porcelain").out.trim() !== "") die("working tree not clean — commit or stash first");
 
-  const oldVersion = currentVersion(a.pkg) || "(not yet a dependency)";
+  if (!a.testExplicit) {
+    const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    const t = pj.scripts && pj.scripts.test;
+    if ((!t || /no test specified/i.test(t)) && pj.scripts && pj.scripts.build) {
+      a.test = `${a.pm.test.split(" ")[0]} run build`;
+      console.log(`→ no test script; using the build as the gate: ${a.test}`);
+    }
+  }
+
+  const targets = a.workspaces ? workspaceDirs(a.pkg) : ["."];
+  if (a.workspaces) console.log(`→ workspaces declaring ${a.pkg}: ${targets.join(", ")}`);
+  const oldVersion = currentVersion(a.pkg, targets[0]) || "(not yet a dependency)";
   const branch = "bumpfix/" + `${a.pkg}-${a.version}`.replace(/[^a-zA-Z0-9._-]/g, "-");
   if (a.branch) {
     if (run(`git checkout -b "${branch}"`).code !== 0) die(`could not create branch ${branch} (already exists?)`);
     console.log(`→ branch ${branch}`);
   }
 
-  console.log(`→ ${a.pm.install} ${a.pkg}@${a.version}`);
-  const inst = run(`${a.pm.install} "${a.pkg}@${a.version}"`, { stdio: ["ignore", "inherit", "inherit"], encoding: undefined });
-  if (inst.code !== 0) die(`${a.pm.install} failed`);
-  const newVersion = currentVersion(a.pkg) || a.version;
+  const specs = [`${a.pkg}@${a.version}`];
+  for (const dir of targets) {
+    for (;;) {
+      const cmd = dir === "." ? a.pm.install : a.pm.install.replace(/ -w$/, "");
+      console.log(`→ ${cmd} ${specs.join(" ")}${dir === "." ? "" : ` (in ${dir})`}`);
+      const inst = run(`${cmd} ${specs.map((x) => `"${x}"`).join(" ")}`, { cwd: dir });
+      if (inst.code === 0) break;
+      // Peer conflict: bump the blocking companion alongside the target and retry.
+      const m = inst.out.match(/Conflicting peer dependency: (@?[\w./-]+)@(\d+)/);
+      const okName = m && /^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(m[1]);
+      const companion = okName ? `${m[1]}@^${m[2]}` : null;
+      if (!companion || specs.includes(companion)) {
+        console.error(inst.out.slice(-3000));
+        die(`install failed${dir === "." ? "" : ` in ${dir}`}`);
+      }
+      console.log(`→ peer conflict with ${m[1]}; retrying with companion ${companion}`);
+      specs.push(companion);
+    }
+  }
+  const newVersion = currentVersion(a.pkg, targets[0]) || a.version;
 
   let result = null;
   for (let i = 0; i <= a.maxIters; i++) {

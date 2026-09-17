@@ -29,6 +29,6 @@
     "url": "git+https://github.com/nipunhsud/bumpfix.git"
   },
   "scripts": {
-    "test": "bash test/smoke.sh && bash test/mcp.sh"
+    "test": "bash test/smoke.sh && bash test/mcp.sh && bash test/v02.sh"
   }
 }

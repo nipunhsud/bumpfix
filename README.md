@@ -1,19 +1,19 @@
-# bumpfix
+# bumpwright
 
 **Upgrade a dependency, then fix the breaking changes — not just the version number.**
 
-Dependabot and Renovate bump the version and hand you a red CI run. `bumpfix`
+Dependabot and Renovate bump the version and hand you a red CI run. `bumpwright`
 bumps the version, runs your tests, and when they break it drives a coding
 agent to migrate your calling code until they pass again — then commits the
 whole thing on a branch, optionally as a PR.
 
 ```
-npx bumpfix react@19
+npx bumpwright react@19
 ```
 
 What it does:
 
-1. Checks your git tree is clean, creates `bumpfix/react-19`.
+1. Checks your git tree is clean, creates `bumpwright/react-19`.
 2. `npm install react@19`.
 3. Runs your tests (`npm test` by default). Green? Commits, done.
 4. Red? Feeds the failing output to a coding agent (Claude Code by default)
@@ -22,13 +22,13 @@ What it does:
 5. Green tests → one commit: the upgrade *and* the migration. `--pr` pushes
    and opens the PR via `gh`.
 
-If the agent can't get to green, bumpfix exits non-zero and leaves the branch
+If the agent can't get to green, bumpwright exits non-zero and leaves the branch
 in place with whatever progress was made. Your main branch is never touched.
 
 ## Install
 
 ```
-npm install -g bumpfix     # or: npx bumpfix <pkg>
+npm install -g bumpwright     # or: npx bumpwright <pkg>
 ```
 
 Requires Node 18+, git, and an agent CLI on your PATH
@@ -37,7 +37,7 @@ Requires Node 18+, git, and an agent CLI on your PATH
 ## Usage
 
 ```
-bumpfix <package>[@version] [options]
+bumpwright <package>[@version] [options]
 
   --test <cmd>      Test command (default: npm test)
   --agent <cmd>     Agent command, receives the fix prompt on stdin
@@ -48,10 +48,10 @@ bumpfix <package>[@version] [options]
   --workspaces      Also bump the package in every workspace subpackage that declares it
 ```
 
-bumpfix also handles the parts that leave Dependabot PRs red or unopened:
+bumpwright also handles the parts that leave Dependabot PRs red or unopened:
 
 - **Companion bumps.** If the install fails on a peer conflict (vite 8 wants a
-  newer `@types/node` than you pin), bumpfix bumps the blocking companion
+  newer `@types/node` than you pin), bumpwright bumps the blocking companion
   alongside the target and retries, instead of dying like `npm install` does.
 - **No test script?** If `package.json` has a build script but no real test
   script, the build becomes the red/green gate automatically.
@@ -60,8 +60,8 @@ bumpfix also handles the parts that leave Dependabot PRs red or unopened:
 
 ## Why not just ask Claude Code?
 
-You can. Claude Code (or any coding agent) can do everything bumpfix does if
-you prompt it carefully every time. bumpfix is the workflow, hardened:
+You can. Claude Code (or any coding agent) can do everything bumpwright does if
+you prompt it carefully every time. bumpwright is the workflow, hardened:
 
 - The guardrails are code, not prompt text: clean tree required, own branch,
   red tests never ship, one reviewable commit. An agent freelancing in your
@@ -74,17 +74,17 @@ you prompt it carefully every time. bumpfix is the workflow, hardened:
 Any agent that reads a prompt on stdin and edits the working directory works:
 
 ```
-bumpfix lodash --agent "claude -p --permission-mode acceptEdits"
-bumpfix lodash --agent "codex exec --full-auto -"
+bumpwright lodash --agent "claude -p --permission-mode acceptEdits"
+bumpwright lodash --agent "codex exec --full-auto -"
 ```
 
-## Security mode: `bumpfix audit`
+## Security mode: `bumpwright audit`
 
 The vulnerabilities nobody patches are the ones where the fix needs a breaking
 upgrade — `npm audit fix` can't touch them and Dependabot's PR arrives red.
 
 ```
-bumpfix audit --pr
+bumpwright audit --pr
 ```
 
 Runs `npm audit`, skips everything a plain `npm audit fix` can handle, and for
@@ -96,7 +96,7 @@ couldn't reach green.
 Standing service on any repo — daily cron via the Action:
 
 ```yaml
-      - uses: nipunhsud/bumpfix@v0.3.0
+      - uses: nipunhsud/bumpwright@v0.4.0
         with:
           package: audit             # security mode
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -118,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: nipunhsud/bumpfix@v0.3.0
+      - uses: nipunhsud/bumpwright@v0.4.0
         with:
           package: react@19          # or matrix over several packages
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -145,6 +145,14 @@ you get silence instead of a red PR to babysit.
 - The agent is instructed to never weaken or skip tests — but review the diff
   like any PR. It's a coding agent, not a notary.
 
+## Related work
+
+[Shridhar2104/bumpfix](https://github.com/marketplace/actions/bumpfix) applies
+the same core idea — an agent fixing what a dependency bump broke, gated on
+tests — as a CI-only action for Python manifests. Bumpwright is the npm-side
+take, and adds initiation (you point it at an upgrade), `audit` security mode,
+workspaces, companion bumps, an MCP server, and agent-agnostic drivers.
+
 ## License
 
 MIT
@@ -152,23 +160,23 @@ MIT
 ## Use with LLM coding tools
 
 **Claude Code (or any agent with a shell):** no integration needed. Install
-bumpfix on your PATH and add one line to your project's `CLAUDE.md`:
+bumpwright on your PATH and add one line to your project's `CLAUDE.md`:
 
 ```
-For dependency upgrades, run `bumpfix <pkg>@<version>` instead of hand-migrating.
+For dependency upgrades, run `bumpwright <pkg>@<version>` instead of hand-migrating.
 ```
 
-**MCP (Claude Desktop, Cursor, and other no-shell clients):** bumpfix ships a
+**MCP (Claude Desktop, Cursor, and other no-shell clients):** bumpwright ships a
 zero-dependency MCP stdio server exposing one tool, `upgrade_dependency`.
 
 ```
-claude mcp add bumpfix -- bumpfix-mcp
+claude mcp add bumpwright -- bumpwright-mcp
 ```
 
 Or in any MCP client config:
 
 ```json
-{ "mcpServers": { "bumpfix": { "command": "bumpfix-mcp" } } }
+{ "mcpServers": { "bumpwright": { "command": "bumpwright-mcp" } } }
 ```
 
 The tool takes `package`, `cwd` (absolute project path), and optionally

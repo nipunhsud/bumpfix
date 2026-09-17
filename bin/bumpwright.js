@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// bumpfix — upgrade a dependency, then fix the breaking changes, not just the version number.
+// bumpwright — upgrade a dependency, then fix the breaking changes, not just the version number.
 // Zero dependencies. Node 18+.
 const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const HELP = `bumpfix <package>[@version] [options]
-       bumpfix audit [options]      Fix every vulnerability that needs a breaking upgrade
+const HELP = `bumpwright <package>[@version] [options]
+       bumpwright audit [options]      Fix every vulnerability that needs a breaking upgrade
 
 Upgrades an npm dependency, runs your tests, and if they break, drives a
 coding agent to migrate your calling code until they pass again.
@@ -18,7 +18,7 @@ Options:
   --max-iters <n>   Max fix attempts (default: 3)
   --workspaces      Also bump the package in every workspace subpackage that declares it
   --pr              Push the branch and open a PR via gh
-  --no-branch       Work on the current branch instead of bumpfix/<pkg>
+  --no-branch       Work on the current branch instead of bumpwright/<pkg>
   -h, --help        Show this help
 `;
 
@@ -27,7 +27,7 @@ function run(cmd, opts = {}) {
   return { code: r.status ?? 1, out: (r.stdout || "") + (r.stderr || "") };
 }
 
-function die(msg) { console.error(`bumpfix: ${msg}`); process.exit(1); }
+function die(msg) { console.error(`bumpwright: ${msg}`); process.exit(1); }
 
 function parseArgs(argv) {
   const pm = detectPm();
@@ -57,14 +57,14 @@ function detectPm() {
   let d = process.cwd();
   for (;;) {
     if (fs.existsSync(path.join(d, "pnpm-lock.yaml")))
-      return { install: d === process.cwd() && fs.existsSync(path.join(d, "pnpm-workspace.yaml")) ? "pnpm add -w" : "pnpm add", test: "pnpm test" };
-    if (fs.existsSync(path.join(d, "yarn.lock"))) return { install: "yarn add", test: "yarn test" };
+      return { install: d === process.cwd() && fs.existsSync(path.join(d, "pnpm-workspace.yaml")) ? "pnpm add -w" : "pnpm add", test: "pnpm test", sync: "pnpm install --frozen-lockfile" };
+    if (fs.existsSync(path.join(d, "yarn.lock"))) return { install: "yarn add", test: "yarn test", sync: "yarn install --frozen-lockfile" };
     if (fs.existsSync(path.join(d, "package-lock.json"))) break;
     const up = path.dirname(d);
     if (up === d) break;
     d = up;
   }
-  return { install: "npm install", test: "npm test" };
+  return { install: "npm install", test: "npm test", sync: "npm ci" };
 }
 
 function currentVersion(pkg, dir = ".") {
@@ -125,11 +125,13 @@ function auditMode(argv) {
   let failed = 0;
   for (const [name, info] of majors) {
     console.log(`\n=== ${name}@${info.version} — security (${info.severity}) ===`);
-    const env = { ...process.env, BUMPFIX_NOTE: `Security: fixes ${[...new Set(info.advisories)].join(", ")}` };
+    const env = { ...process.env, BUMPWRIGHT_NOTE: `Security: fixes ${[...new Set(info.advisories)].join(", ")}` };
     const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env });
     if ((r.status ?? 1) !== 0) failed++;
     run(`git checkout -f "${start}"`); // back to the starting point...
-    run("git checkout -- ."); // ...and drop any residue a failed child left, so the next target starts clean
+    run("git checkout -- ."); // ...drop any residue a failed child left...
+    console.log("→ resyncing node_modules to the lockfile");
+    run(detectPm().sync); // ...and undo the target's install: git can't restore node_modules
   }
   console.log(failed ? `\n✗ ${failed}/${majors.size} security upgrades did not reach green` : `\n✓ all ${majors.size} security upgrades green`);
   process.exit(failed ? 1 : 0);
@@ -162,7 +164,7 @@ function main() {
   const targets = a.workspaces ? workspaceDirs(a.pkg) : ["."];
   if (a.workspaces) console.log(`→ workspaces declaring ${a.pkg}: ${targets.join(", ")}`);
   const oldVersion = currentVersion(a.pkg, targets[0]) || "(not yet a dependency)";
-  const branch = "bumpfix/" + `${a.pkg}-${a.version}`.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const branch = "bumpwright/" + `${a.pkg}-${a.version}`.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+/, "");
   if (a.branch) {
     if (run(`git checkout -b "${branch}"`).code !== 0) die(`could not create branch ${branch} (already exists?)`);
     console.log(`→ branch ${branch}`);
@@ -196,7 +198,7 @@ function main() {
     if (result.code === 0) break;
     if (i === a.maxIters) {
       console.error(result.out.slice(-4000));
-      console.error(`\nbumpfix: tests still failing after ${a.maxIters} fix attempts.`);
+      console.error(`\nbumpwright: tests still failing after ${a.maxIters} fix attempts.`);
       console.error(a.branch ? `Branch ${branch} left in place for manual work.` : "Changes left in working tree.");
       process.exit(1);
     }
@@ -214,13 +216,13 @@ Rules:
 Failing test output:
 ${result.out.slice(-8000)}`;
     const agent = spawnSync(a.agent, { shell: true, input: prompt, stdio: ["pipe", "inherit", "inherit"] });
-    if ((agent.status ?? 1) !== 0) console.error("bumpfix: agent command exited non-zero, re-running tests anyway");
+    if ((agent.status ?? 1) !== 0) console.error("bumpwright: agent command exited non-zero, re-running tests anyway");
   }
 
   console.log("✓ tests passing");
   run("git add -A");
-  const note = process.env.BUMPFIX_NOTE ? `${process.env.BUMPFIX_NOTE}\n\n` : "";
-  const msg = `Upgrade ${a.pkg} ${oldVersion} -> ${newVersion} and migrate breaking changes\n\n${note}Automated by bumpfix.`;
+  const note = process.env.BUMPWRIGHT_NOTE ? `${process.env.BUMPWRIGHT_NOTE}\n\n` : "";
+  const msg = `Upgrade ${a.pkg} ${oldVersion} -> ${newVersion} and migrate breaking changes\n\n${note}Automated by bumpwright.`;
   if (run(`git commit -m "${msg.replace(/"/g, '\\"')}"`).code !== 0) die("git commit failed");
   console.log(`✓ committed upgrade of ${a.pkg} to ${newVersion}`);
 

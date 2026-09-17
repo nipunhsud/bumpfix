@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v0.2 checks: auto build gate, --workspaces, companion bump on peer conflict.
 set -euo pipefail
-BUMPFIX="$(cd "$(dirname "$0")/.." && pwd)/bin/bumpfix.js"
+BUMPWRIGHT="$(cd "$(dirname "$0")/.." && pwd)/bin/bumpwright.js"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -18,7 +18,7 @@ CHK
 npm install --silent >/dev/null 2>&1
 printf '#!/usr/bin/env bash\ntouch fixed.txt\n' > agent.sh && chmod +x agent.sh
 git add -A && git commit -qm init
-OUT=$(node "$BUMPFIX" isarray@2.0.5 --agent ./agent.sh)
+OUT=$(node "$BUMPWRIGHT" isarray@2.0.5 --agent ./agent.sh)
 echo "$OUT" | grep -q "using the build as the gate" || { echo "FAIL: build gate not chosen"; exit 1; }
 git log -1 --pretty=%s | grep -q "Upgrade isarray" || { echo "FAIL: gate run did not commit"; exit 1; }
 
@@ -29,7 +29,7 @@ printf '{ "name":"root","private":true,"scripts":{"test":"exit 0"} }' > package.
 printf '{ "name":"a","dependencies":{"isarray":"1.0.0"} }' > packages/a/package.json
 printf '{ "name":"b","devDependencies":{"isarray":"1.0.0"} }' > packages/b/package.json
 git add -A && git commit -qm init
-node "$BUMPFIX" isarray@2.0.5 --workspaces >/dev/null
+node "$BUMPWRIGHT" isarray@2.0.5 --workspaces >/dev/null
 grep -q '2.0.5' packages/a/package.json || { echo "FAIL: workspace a not bumped"; exit 1; }
 grep -q '2.0.5' packages/b/package.json || { echo "FAIL: workspace b not bumped"; exit 1; }
 
@@ -39,22 +39,22 @@ git init -q -b main && git config user.email t@t && git config user.name t
 printf '{ "name":"p","private":true,"devDependencies":{"@types/node":"^18.0.0"},"scripts":{"test":"exit 0"} }' > package.json
 npm install --silent >/dev/null 2>&1
 git add -A && git commit -qm init
-OUT=$(node "$BUMPFIX" vite@8 --no-branch 2>&1) || { echo "$OUT" | tail -5; echo "FAIL: peer-conflict run failed"; exit 1; }
+OUT=$(node "$BUMPWRIGHT" vite@8 --no-branch 2>&1) || { echo "$OUT" | tail -5; echo "FAIL: peer-conflict run failed"; exit 1; }
 echo "$OUT" | grep -q "retrying with companion @types/node@^2" || { echo "FAIL: no companion retry"; exit 1; }
 grep -Eq '"@types/node": ?"\^2' package.json || { echo "FAIL: companion not bumped"; exit 1; }
 
 echo "V02 OK"
 
-# 4. bumpfix audit: a vuln whose fix is a major bump gets its own green branch
+# 4. bumpwright audit: a vuln whose fix is a major bump gets its own green branch
 #    with the advisory in the commit (live npm audit against minimist 0.0.8).
 mkdir "$TMP/audit" && cd "$TMP/audit"
 git init -q -b main && git config user.email t@t && git config user.name t
 printf '{ "name":"v","private":true,"dependencies":{"minimist":"0.0.8"},"scripts":{"test":"exit 0"} }' > package.json
 npm install --silent >/dev/null 2>&1 || true
 git add -A && git commit -qm init
-OUT=$(node "$BUMPFIX" audit 2>&1) || { echo "$OUT" | tail -5; echo "FAIL: audit run failed"; exit 1; }
+OUT=$(node "$BUMPWRIGHT" audit 2>&1) || { echo "$OUT" | tail -5; echo "FAIL: audit run failed"; exit 1; }
 echo "$OUT" | grep -q "security" || { echo "FAIL: no security section"; exit 1; }
-BR=$(git branch --list 'bumpfix/minimist-*' --format='%(refname:short)' | head -1)
+BR=$(git branch --list 'bumpwright/minimist-*' --format='%(refname:short)' | head -1)
 [ -n "$BR" ] || { echo "FAIL: no audit branch created"; exit 1; }
 git log "$BR" -1 --pretty=%B | grep -q "Security: fixes" || { echo "FAIL: advisory not in commit"; exit 1; }
 git show "$BR:package.json" | grep -Eq '"minimist": ?"\^?1' || { echo "FAIL: minimist not on 1.x"; exit 1; }
@@ -66,8 +66,8 @@ mkdir "$TMP/red" && cd "$TMP/red"
 git init -q -b main && git config user.email t@t && git config user.name t
 printf '{ "name":"r","private":true,"dependencies":{"isarray":"1.0.0"},"scripts":{"test":"exit 1"} }' > package.json
 npm install --silent >/dev/null 2>&1 && git add -A && git commit -qm init
-if node "$BUMPFIX" isarray@2.0.5 2>/dev/null; then echo "FAIL: red baseline accepted"; exit 1; fi
+if node "$BUMPWRIGHT" isarray@2.0.5 2>/dev/null; then echo "FAIL: red baseline accepted"; exit 1; fi
 [ -z "$(git status --porcelain)" ] || { echo "FAIL: red baseline dirtied tree"; exit 1; }
-git branch --list 'bumpfix/*' | grep -q . && { echo "FAIL: branch created despite red baseline"; exit 1; }
+git branch --list 'bumpwright/*' | grep -q . && { echo "FAIL: branch created despite red baseline"; exit 1; }
 
 echo "BASELINE OK"

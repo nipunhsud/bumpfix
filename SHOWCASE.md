@@ -1,13 +1,13 @@
 # Showcase: real migrations, real diffs
 
-Runs of bumpfix on forks of well-known open-source repos. Every diff below was
-produced by `bumpfix <pkg> --test <cmd>` with no manual edits, then verified by
+Runs of bumpwright on forks of well-known open-source repos. Every diff below was
+produced by `bumpwright <pkg> --test <cmd>` with no manual edits, then verified by
 running the repo's own lint/test suite.
 
 ## Express: ESLint 8.47 → 9.39 (flat config migration)
 
 - **Diff:** https://github.com/nipunhsud/express/compare/master...bumpfix/eslint-9
-- **Command:** `bumpfix eslint@9 --test "npm run lint"`
+- **Command:** `bumpwright eslint@9 --test "npm run lint"`
 - **What broke:** ESLint 9 drops `.eslintrc.yml`/`.eslintignore` entirely and
   changes the `no-unused-vars` default for `catch` bindings.
 - **What the agent did (2 fix iterations):** wrote a direct flat
@@ -24,7 +24,7 @@ running the repo's own lint/test suite.
   pin (npm refuses the install — the classic red-Dependabot failure), and
   vite 8's types are exports-only, invisible to node10 resolution.
 - **Result:** companion bump first, then vite; 22/22 turbo build + lint tasks
-  green. This run is why bumpfix now does companion bumps automatically.
+  green. This run is why bumpwright now does companion bumps automatically.
 
 ## SDEverywhere (climate modeling, pnpm monorepo): vite 7 → 8
 
@@ -32,6 +32,6 @@ running the repo's own lint/test suite.
 - **Findings report on their #906:** four packages plus the Svelte vite-plugin
   companion migrated green; the finish is blocked by plugin-check overriding
   vite's internal `vite:resolve` plugin, which vite 8's Rolldown core removed.
-- **The honest lesson:** bumpfix reached green on everything a dependency bump
+- **The honest lesson:** bumpwright reached green on everything a dependency bump
   can fix, and correctly refused to ship the part that needs a real rework.
   Red that never ships is the feature.*

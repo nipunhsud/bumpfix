@@ -1,4 +1,4 @@
-name: Bumpfix Upgrade Agent
+name: Bumpwright Upgrade Agent
 description: Upgrade a dependency and migrate breaking changes behind your test gate, then open a green PR
 branding: { icon: git-pull-request, color: green }
 inputs:
@@ -24,14 +24,14 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install bumpfix and Claude Code
+    - name: Install bumpwright and Claude Code
       shell: bash
-      run: npm install -g github:nipunhsud/bumpfix#v0.3.0 @anthropic-ai/claude-code
+      run: npm install -g github:nipunhsud/bumpwright#v0.4.0 @anthropic-ai/claude-code
     - name: Configure git identity
       shell: bash
       run: |
-        git config user.name "bumpfix"
-        git config user.email "bumpfix[bot]@users.noreply.github.com"
+        git config user.name "bumpwright"
+        git config user.email "bumpwright[bot]@users.noreply.github.com"
     - name: Upgrade and migrate
       shell: bash
       env:
@@ -40,4 +40,4 @@ runs:
         ARGS=(--max-iters "${{ inputs.max-iters }}" --pr)
         [ -n "${{ inputs.test }}" ] && ARGS+=(--test "${{ inputs.test }}")
         [ "${{ inputs.workspaces }}" = "true" ] && ARGS+=(--workspaces)
-        bumpfix "${{ inputs.package }}" "${ARGS[@]}"
+        bumpwright "${{ inputs.package }}" "${ARGS[@]}"

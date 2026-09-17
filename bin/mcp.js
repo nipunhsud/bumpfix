@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// bumpfix-mcp — MCP stdio server exposing bumpfix as a tool.
+// bumpwright-mcp — MCP stdio server exposing bumpwright as a tool.
 // Zero dependencies: newline-delimited JSON-RPC 2.0 per the MCP stdio transport.
 const readline = require("readline");
 const { spawn } = require("child_process");
@@ -7,7 +7,7 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 
-const BUMPFIX = path.join(__dirname, "bumpfix.js");
+const BUMPWRIGHT = path.join(__dirname, "bumpwright.js");
 const VERSION = require("../package.json").version;
 const PROTOCOL = "2025-06-18";
 const TAIL = 10000; // chars of run output returned to the client
@@ -28,7 +28,7 @@ const TOOL = {
   description:
     "Upgrade an npm dependency in a git repository and automatically migrate the calling code past any breaking changes. " +
     "Bumps the package, runs the project's tests, and if they fail drives a coding agent to fix the source until tests pass. " +
-    "Commits on a bumpfix/<pkg> branch; never touches main; fails rather than shipping red tests. " +
+    "Commits on a bumpwright/<pkg> branch; never touches main; fails rather than shipping red tests. " +
     "Requires a clean git working tree.",
   inputSchema: {
     type: "object",
@@ -63,7 +63,7 @@ function callTool(args, respond) {
     return fail("an upgrade is already running in this server — wait for it to finish");
 
   const spec = args.version ? `${args.package}@${args.version}` : args.package;
-  const argv = [BUMPFIX, spec];
+  const argv = [BUMPWRIGHT, spec];
   if (args.test) argv.push("--test", String(args.test));
   if (args.agent) argv.push("--agent", String(args.agent));
   if (args.max_iters !== undefined) argv.push("--max-iters", String(args.max_iters));
@@ -78,7 +78,7 @@ function callTool(args, respond) {
   };
   const child = spawn(process.execPath, argv, { cwd: args.cwd, env: ENV });
   const timer = setTimeout(() => {
-    out += `\nbumpfix-mcp: run exceeded ${TIMEOUT_MS / 60000} minutes, killed`;
+    out += `\nbumpwright-mcp: run exceeded ${TIMEOUT_MS / 60000} minutes, killed`;
     child.kill("SIGTERM");
   }, TIMEOUT_MS);
   child.stdout.on("data", (d) => { out = (out + d).slice(-TAIL * 2); });
@@ -98,7 +98,7 @@ rl.on("line", (line) => {
   if (id === undefined || id === null) return; // notification — nothing to do
   try {
     if (method === "initialize") {
-      reply(id, { protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo: { name: "bumpfix", version: VERSION } });
+      reply(id, { protocolVersion: PROTOCOL, capabilities: { tools: {} }, serverInfo: { name: "bumpwright", version: VERSION } });
     } else if (method === "tools/list") {
       reply(id, { tools: [TOOL] });
     } else if (method === "tools/call") {

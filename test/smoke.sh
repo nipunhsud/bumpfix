@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Smoke test: exercises the full orchestration loop (branch, install, failing
+# tests, agent invocation via stdin, retest, commit) with a fake agent.
+set -euo pipefail
+BUMPFIX="$(cd "$(dirname "$0")/.." && pwd)/bin/bumpfix.js"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+cd "$TMP"
+
+git init -q -b main
+git config user.email t@t && git config user.name t
+cat > package.json <<'PKG'
+{ "name": "fixture", "version": "1.0.0", "private": true,
+  "dependencies": { "isarray": "1.0.0" },
+  "scripts": { "test": "test -f fixed.txt" } }
+PKG
+npm install --silent >/dev/null 2>&1
+# Fake agent: verifies the prompt arrived on stdin, then "fixes" the code.
+cat > agent.sh <<'AGENT'
+#!/usr/bin/env bash
+grep -q 'isarray' /dev/stdin || { echo "prompt missing package name" >&2; exit 1; }
+touch fixed.txt
+AGENT
+chmod +x agent.sh
+git add -A && git commit -qm init
+
+node "$BUMPFIX" isarray@2.0.5 --agent ./agent.sh --max-iters 2
+
+git rev-parse --verify -q bumpfix/isarray-2.0.5 >/dev/null || { echo "FAIL: branch missing"; exit 1; }
+git log -1 --pretty=%s | grep -q "Upgrade isarray" || { echo "FAIL: commit missing"; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "FAIL: dirty tree after run"; exit 1; }
+grep -q '"isarray": "\^\?2' package.json || grep -q '2.0.5' package.json || { echo "FAIL: version not bumped"; exit 1; }
+echo "SMOKE OK"

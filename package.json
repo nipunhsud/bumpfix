@@ -1,0 +1,13 @@
+{
+  "name": "bumpfix",
+  "version": "0.1.0",
+  "description": "Upgrade a dependency, then fix the breaking changes — not just the version number. Dependabot bumps; bumpfix migrates.",
+  "bin": { "bumpfix": "bin/bumpfix.js" },
+  "files": ["bin"],
+  "engines": { "node": ">=18" },
+  "keywords": ["dependencies", "upgrade", "migration", "breaking-changes", "ai", "agent", "dependabot", "renovate"],
+  "author": "Nipun Sud",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/nipunhsud/bumpfix.git" },
+  "scripts": { "test": "bash test/smoke.sh" }
+}

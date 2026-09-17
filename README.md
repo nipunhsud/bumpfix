@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: nipunhsud/bumpfix@main
+      - uses: nipunhsud/bumpfix@v0.2.0
         with:
           package: react@19          # or matrix over several packages
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -18,14 +18,15 @@ inputs:
     required: false
     default: "false"
   anthropic-api-key:
-    description: API key for the default Claude Code agent
-    required: true
+    description: API key for the default Claude Code agent (not needed with max-iters 0)
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
     - name: Install bumpfix and Claude Code
       shell: bash
-      run: npm install -g github:nipunhsud/bumpfix @anthropic-ai/claude-code
+      run: npm install -g github:nipunhsud/bumpfix#v0.2.0 @anthropic-ai/claude-code
     - name: Configure git identity
       shell: bash
       run: |

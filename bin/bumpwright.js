@@ -121,66 +121,150 @@ function workspaceDirs(pkg) {
   return dirs.length ? dirs : ["."];
 }
 
+function vtuple(v) { return String(v).split("-")[0].split(".").map((n) => parseInt(n, 10) || 0); }
+function isDowngrade(fix, cur) {
+  const [a, b] = [vtuple(fix), vtuple(cur)];
+  for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); }
+  return false;
+}
+function installedVersion(name) {
+  try { return JSON.parse(fs.readFileSync(path.join("node_modules", name, "package.json"), "utf8")).version; }
+  catch { return null; }
+}
+function addTarget(majors, name, version, severity, advisories, counts) {
+  const cur = installedVersion(name);
+  if (cur && isDowngrade(version, cur)) {
+    console.log(`→ skipping ${name}: proposed fix is a downgrade (${cur} -> ${version})`);
+    counts.downgrades++;
+    return;
+  }
+  const entry = majors.get(name) || { version, severity, advisories: [] };
+  if (isDowngrade(entry.version, version)) entry.version = version; // several advisories: take the highest patched version
+  entry.advisories.push(...advisories);
+  majors.set(name, entry);
+}
+
+function collectNpmAudit(counts) {
+  console.log("→ npm audit --json");
+  const audit = run("npm audit --json");
+  let report;
+  try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"), audit.out.lastIndexOf("}") + 1)); }
+  catch {
+    die(/lock/i.test(audit.out)
+      ? "npm audit needs a package-lock.json — run `npm install` first"
+      : "could not parse npm audit output");
+  }
+  const vulns = report.vulnerabilities || {};
+  const advisoriesOf = (v, depth = 0) => {
+    if (!v || depth > 2) return [];
+    return (v.via || []).flatMap((x) =>
+      typeof x === "object" ? [x.url || x.title].filter(Boolean) : advisoriesOf(vulns[x], depth + 1));
+  };
+  const majors = new Map();
+  for (const v of Object.values(vulns)) {
+    const f = v.fixAvailable;
+    if (!f) continue;
+    if (f === true || !f.isSemVerMajor) { counts.fixable++; continue; }
+    addTarget(majors, f.name, f.version, v.severity, advisoriesOf(v), counts);
+  }
+  if (counts.fixable) console.log(`→ ${counts.fixable} finding(s) fixable without a major bump — run \`npm audit fix\` for those`);
+  return majors;
+}
+
+function collectPnpmAudit(counts) {
+  console.log("→ pnpm audit --json");
+  const audit = run("pnpm audit --json");
+  let report;
+  try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"), audit.out.lastIndexOf("}") + 1)); } catch { die("could not parse pnpm audit output"); }
+  const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const direct = new Set([...Object.keys(pj.dependencies || {}), ...Object.keys(pj.devDependencies || {})]);
+  const majors = new Map();
+  for (const adv of Object.values(report.advisories || {})) {
+    const name = adv.module_name;
+    // ponytail: direct deps of this package.json only; transitive fixes need overrides or upstream bumps
+    if (!direct.has(name)) { counts.transitive++; continue; }
+    // Ranges like ">=0.2.4 <1.0.0 || >=1.2.3" patch several lines; target the highest floor.
+    const floors = [...String(adv.patched_versions || "").matchAll(/>=\s*([\d.]+)/g)].map((x) => x[1]);
+    const m = floors.length ? [null, floors.sort((a, b) => (isDowngrade(a, b) ? -1 : 1)).pop()] : null;
+    if (!m) { counts.transitive++; continue; }
+    const cur = (adv.findings && adv.findings[0] && adv.findings[0].version) || installedVersion(name);
+    if (cur && isDowngrade(m[1], cur)) { counts.downgrades++; continue; }
+    addTarget(majors, name, m[1], adv.severity || "security", [adv.url].filter(Boolean), counts);
+  }
+  if (counts.transitive) console.log(`→ ${counts.transitive} finding(s) in transitive deps — out of scope for a direct bump (overrides or upstream)`);
+  return majors;
+}
+
+function collectPyAudit(counts) {
+  const tool = run("command -v pip-audit").code === 0 ? "pip-audit" : "uvx pip-audit";
+  // Audit the project's own requirements, not whichever environment pip-audit runs in.
+  let src = "";
+  if (fs.existsSync("requirements.txt")) src = "-r requirements.txt";
+  else if (pyUsesUv()) {
+    const tmp = path.join(process.env.TMPDIR || "/tmp", `bw-req-${process.pid}.txt`);
+    if (run(`uv export --format requirements-txt --no-emit-project -o "${tmp}"`).code === 0) src = `-r "${tmp}"`;
+  }
+  console.log(`→ ${tool} -f json ${src}`.trim());
+  const audit = run(`${tool} -f json ${src}`);
+  let report;
+  try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"), audit.out.lastIndexOf("}") + 1)); } catch { die("could not parse pip-audit output — is pip-audit installed?"); }
+  const direct = new Set();
+  if (fs.existsSync("requirements.txt"))
+    for (const line of fs.readFileSync("requirements.txt", "utf8").split("\n")) {
+      const m = line.match(/^\s*([A-Za-z0-9_.-]+)/); if (m) direct.add(m[1].toLowerCase());
+    }
+  if (fs.existsSync("pyproject.toml"))
+    for (const m of fs.readFileSync("pyproject.toml", "utf8").matchAll(/^\s*"([A-Za-z0-9_.-]+)[=<>~!;\[" ]/gm))
+      direct.add(m[1].toLowerCase()); // ponytail: regex over quoted strings, close enough for dependency arrays
+  const majors = new Map();
+  for (const dep of report.dependencies || []) {
+    const vulns = (dep.vulns || []).filter((v) => (v.fix_versions || []).length);
+    if (!vulns.length) continue;
+    if (direct.size && !direct.has(dep.name.toLowerCase())) { counts.transitive++; continue; }
+    const fixes = vulns.flatMap((v) => v.fix_versions);
+    const target = fixes.sort((a, b) => (isDowngrade(a, b) ? -1 : 1)).pop();
+    if (isDowngrade(target, dep.version)) { counts.downgrades++; continue; }
+    const urls = vulns.map((v) => `https://osv.dev/vulnerability/${v.id}`);
+    addTarget(majors, dep.name, target, "security", urls, counts);
+  }
+  if (counts.transitive) console.log(`→ ${counts.transitive} vulnerable transitive/unlisted package(s) — out of scope for a direct bump`);
+  return majors;
+}
+
 function auditMode(argv) {
-  if (!fs.existsSync("package.json")) die("no package.json here — run from your project root");
+  if (!fs.existsSync("package.json") && !isPython()) die("no package.json, pyproject.toml, or requirements.txt here — run from your project root");
   const passthrough = [];
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (["--test", "--agent", "--max-iters"].includes(v)) passthrough.push(v, argv[++i]);
     else if (["--pr", "--no-branch", "--workspaces"].includes(v)) passthrough.push(v);
   }
-  console.log("→ npm audit --json");
-  const audit = run("npm audit --json");
-  let report;
-  try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"))); } catch { die("could not parse npm audit output"); }
-  const vulns = report.vulnerabilities || {};
-  const advisoriesOf = (v, depth = 0) => {
-    // Advisory URLs often live on the transitive entry a via-string points at.
-    if (!v || depth > 2) return [];
-    return (v.via || []).flatMap((x) =>
-      typeof x === "object" ? [x.url || x.title].filter(Boolean) : advisoriesOf(vulns[x], depth + 1));
-  };
-  const installedVersion = (name) => {
-    try { return JSON.parse(fs.readFileSync(path.join("node_modules", name, "package.json"), "utf8")).version; }
-    catch { return null; }
-  };
-  const vtuple = (v) => String(v).split("-")[0].split(".").map((n) => parseInt(n, 10) || 0);
-  const isDowngrade = (fix, cur) => {
-    const [a, b] = [vtuple(fix), vtuple(cur)];
-    for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); }
-    return false;
-  };
-  const majors = new Map();
-  let fixable = 0, downgrades = 0;
-  for (const v of Object.values(vulns)) {
-    const f = v.fixAvailable;
-    if (!f) continue;
-    if (f === true || !f.isSemVerMajor) { fixable++; continue; }
-    const cur = installedVersion(f.name);
-    if (cur !== null && isDowngrade(f.version, cur)) {
-      // npm sometimes proposes an older version as the "fix" — a downgrade PR helps nobody.
-      console.log(`→ skipping ${f.name}: npm proposes a downgrade (${cur} -> ${f.version})`);
-      downgrades++;
-      continue;
-    }
-    const entry = majors.get(f.name) || { version: f.version, severity: v.severity, advisories: [] };
-    entry.advisories.push(...advisoriesOf(v));
-    majors.set(f.name, entry);
+  const counts = { fixable: 0, downgrades: 0, transitive: 0 };
+  let majors, sync;
+  if (isPython()) {
+    majors = collectPyAudit(counts);
+    sync = pyUsesUv() ? "uv sync" : (fs.existsSync("requirements.txt") ? "python3 -m pip install -r requirements.txt" : "true");
+  } else if (fs.existsSync("pnpm-lock.yaml")) {
+    majors = collectPnpmAudit(counts);
+    sync = "pnpm install --frozen-lockfile";
+  } else {
+    majors = collectNpmAudit(counts);
+    sync = detectPm().sync;
   }
-  if (fixable) console.log(`→ ${fixable} finding(s) fixable without a major bump — run \`npm audit fix\` for those`);
+  if (counts.downgrades) console.log(`→ ${counts.downgrades} proposed fix(es) skipped as downgrades`);
   if (!majors.size) { console.log("✓ no vulnerabilities need a breaking upgrade"); process.exit(0); }
   const start = run("git rev-parse --abbrev-ref HEAD").out.trim();
   let failed = 0;
   for (const [name, info] of majors) {
     console.log(`\n=== ${name}@${info.version} — security (${info.severity}) ===`);
     const urls = [...new Set(info.advisories)];
-    const env = { ...process.env, BUMPWRIGHT_NOTE: urls.length ? `Security: fixes ${urls.join(", ")}` : `Security: fixes npm audit finding (${info.severity})` };
+    const env = { ...process.env, BUMPWRIGHT_NOTE: urls.length ? `Security: fixes ${urls.join(", ")}` : `Security: fixes audit finding (${info.severity})` };
     const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env });
     if ((r.status ?? 1) !== 0) failed++;
-    run(`git checkout -f "${start}"`); // back to the starting point...
-    run("git checkout -- ."); // ...drop any residue a failed child left...
-    console.log("→ resyncing node_modules to the lockfile");
-    run(detectPm().sync); // ...and undo the target's install: git can't restore node_modules
+    run(`git checkout -f "${start}"`);
+    run("git checkout -- .");
+    console.log("→ resyncing installed packages to the lockfile");
+    run(sync);
   }
   console.log(failed ? `\n✗ ${failed}/${majors.size} security upgrades did not reach green` : `\n✓ all ${majors.size} security upgrades green`);
   process.exit(failed ? 1 : 0);

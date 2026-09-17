@@ -93,7 +93,7 @@ bumpwright requests@2.32.5 --test pytest
 - Default gate is `pytest`; pass `--test` for anything else
 - Same guardrails: clean tree, green baseline required, own branch, red never ships
 
-`audit` for Python (pip-audit) is next on the roadmap; today audit mode is npm-only.
+`bumpwright audit` works here too, via pip-audit.
 
 ## Security mode: `bumpwright audit`
 
@@ -104,9 +104,13 @@ upgrade — `npm audit fix` can't touch them and Dependabot's PR arrives red.
 bumpwright audit --pr
 ```
 
-Runs `npm audit`, skips everything a plain `npm audit fix` can handle, and for
-each finding whose fix is a semver-major bump it runs the full migrate loop on
-its own branch. The advisory URLs and severity land in the commit and PR body,
+Works across ecosystems: `npm audit` for npm repos, `pnpm audit` for pnpm
+workspaces (direct dependencies; transitive findings are reported, not
+guessed at), and `pip-audit` for Python projects. Findings a plain
+`npm audit fix` can handle are left to it; every fix that needs a real
+version jump runs the full migrate loop on its own branch. Proposed
+downgrades are skipped, and multiple advisories on one package resolve
+to the highest patched version. The advisory URLs and severity land in the commit and PR body,
 so the PR reads as the security fix it is. Exits non-zero if any upgrade
 couldn't reach green.
 

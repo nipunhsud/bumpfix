@@ -8,14 +8,17 @@ trap 'rm -rf "$TMP"' EXIT
 # --- pnpm: direct vulnerable dep gets bumped to the highest patched version ---
 mkdir "$TMP/pn" && cd "$TMP/pn"
 git init -q -b main && git config user.email t@t && git config user.name t
-printf '{ "name":"pn","private":true,"dependencies":{"minimist":"0.0.8"},"scripts":{"test":"exit 0"} }' > package.json
+printf '{ "name":"pn","private":true,"scripts":{"test":"exit 0"} }' > package.json
+printf 'packages:\n  - packages/*\n' > pnpm-workspace.yaml
+mkdir -p packages/a
+printf '{ "name":"a","private":true,"dependencies":{"minimist":"0.0.8"},"scripts":{"test":"exit 0"} }' > packages/a/package.json
 pnpm install --silent >/dev/null 2>&1
 printf 'node_modules/\n' > .gitignore
 git add -A && git commit -qm init
 node "$BW" audit >/dev/null 2>&1 || { echo "FAIL: pnpm audit run failed"; exit 1; }
 BR=$(git branch --list 'bumpwright/minimist-*' --format='%(refname:short)' | head -1)
 [ -n "$BR" ] || { echo "FAIL: no pnpm audit branch"; exit 1; }
-git show "$BR:package.json" | grep -Eq '"minimist": ?"\^?(0\.2\.[4-9]|[1-9])' || { echo "FAIL: minimist not bumped past advisories"; git show "$BR:package.json"; exit 1; }
+git show "$BR:packages/a/package.json" | grep -Eq '"minimist": ?"\^?(0\.2\.[4-9]|[1-9])' || { echo "FAIL: minimist not bumped past advisories"; git show "$BR:package.json"; exit 1; }
 git log "$BR" -1 --pretty=%B | grep -q "Security: fixes http" || { echo "FAIL: no advisory in pnpm commit"; exit 1; }
 echo "PNPM AUDIT OK"
 

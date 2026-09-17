@@ -171,17 +171,40 @@ function collectNpmAudit(counts) {
   return majors;
 }
 
+function directDepDirs() {
+  const map = new Map();
+  const record = (dir) => {
+    try {
+      const pj = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+      for (const k of ["dependencies", "devDependencies"])
+        for (const name of Object.keys(pj[k] || {}))
+          if (!map.has(name)) map.set(name, dir);
+    } catch { /* no manifest */ }
+  };
+  record(".");
+  (function walk(d, depth) {
+    if (depth > 4) return;
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name === "node_modules" || e.name.startsWith(".")) continue;
+      const sub = path.join(d, e.name);
+      if (fs.existsSync(path.join(sub, "package.json"))) record(sub);
+      walk(sub, depth + 1);
+    }
+  })(".", 1);
+  return map;
+}
+
 function collectPnpmAudit(counts) {
   console.log("→ pnpm audit --json");
   const audit = run("pnpm audit --json");
   let report;
   try { report = JSON.parse(audit.out.slice(audit.out.indexOf("{"), audit.out.lastIndexOf("}") + 1)); } catch { die("could not parse pnpm audit output"); }
-  const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
-  const direct = new Set([...Object.keys(pj.dependencies || {}), ...Object.keys(pj.devDependencies || {})]);
+  const direct = directDepDirs(); // any workspace manifest counts as direct
   const majors = new Map();
   for (const adv of Object.values(report.advisories || {})) {
     const name = adv.module_name;
-    // ponytail: direct deps of this package.json only; transitive fixes need overrides or upstream bumps
     if (!direct.has(name)) { counts.transitive++; continue; }
     // Ranges like ">=0.2.4 <1.0.0 || >=1.2.3" patch several lines; target the highest floor.
     const floors = [...String(adv.patched_versions || "").matchAll(/>=\s*([\d.]+)/g)].map((x) => x[1]);
@@ -190,6 +213,8 @@ function collectPnpmAudit(counts) {
     const cur = (adv.findings && adv.findings[0] && adv.findings[0].version) || installedVersion(name);
     if (cur && isDowngrade(m[1], cur)) { counts.downgrades++; continue; }
     addTarget(majors, name, m[1], adv.severity || "security", [adv.url].filter(Boolean), counts);
+    const entry = majors.get(name);
+    if (entry) entry.dir = direct.get(name);
   }
   if (counts.transitive) console.log(`→ ${counts.transitive} finding(s) in transitive deps — out of scope for a direct bump (overrides or upstream)`);
   return majors;
@@ -259,7 +284,8 @@ function auditMode(argv) {
     console.log(`\n=== ${name}@${info.version} — security (${info.severity}) ===`);
     const urls = [...new Set(info.advisories)];
     const env = { ...process.env, BUMPWRIGHT_NOTE: urls.length ? `Security: fixes ${urls.join(", ")}` : `Security: fixes audit finding (${info.severity})` };
-    const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env });
+    if (info.dir && info.dir !== ".") console.log(`→ in workspace ${info.dir}`);
+    const r = spawnSync(process.execPath, [__filename, `${name}@${info.version}`, ...passthrough], { stdio: "inherit", env, cwd: info.dir || "." });
     if ((r.status ?? 1) !== 0) failed++;
     run(`git checkout -f "${start}"`);
     run("git checkout -- .");

@@ -28,7 +28,8 @@ function run(cmd, opts = {}) {
 function die(msg) { console.error(`bumpfix: ${msg}`); process.exit(1); }
 
 function parseArgs(argv) {
-  const a = { test: "npm test", agent: "claude -p --permission-mode acceptEdits", maxIters: 3, pr: false, branch: true };
+  const pm = detectPm();
+  const a = { pm, test: pm.test, agent: "claude -p --permission-mode acceptEdits", maxIters: 3, pr: false, branch: true };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
@@ -47,6 +48,20 @@ function parseArgs(argv) {
   if (!/^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(a.pkg)) die(`invalid package name: ${a.pkg}`);
   if (!/^[\w.^~<>=*|+ -]+$/.test(a.version)) die(`invalid version spec: ${a.version}`);
   return a;
+}
+
+function detectPm() {
+  let d = process.cwd();
+  for (;;) {
+    if (fs.existsSync(path.join(d, "pnpm-lock.yaml")))
+      return { install: d === process.cwd() && fs.existsSync(path.join(d, "pnpm-workspace.yaml")) ? "pnpm add -w" : "pnpm add", test: "pnpm test" };
+    if (fs.existsSync(path.join(d, "yarn.lock"))) return { install: "yarn add", test: "yarn test" };
+    if (fs.existsSync(path.join(d, "package-lock.json"))) break;
+    const up = path.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return { install: "npm install", test: "npm test" };
 }
 
 function currentVersion(pkg) {
@@ -72,9 +87,9 @@ function main() {
     console.log(`→ branch ${branch}`);
   }
 
-  console.log(`→ npm install ${a.pkg}@${a.version}`);
-  const inst = run(`npm install "${a.pkg}@${a.version}"`, { stdio: ["ignore", "inherit", "inherit"], encoding: undefined });
-  if (inst.code !== 0) die("npm install failed");
+  console.log(`→ ${a.pm.install} ${a.pkg}@${a.version}`);
+  const inst = run(`${a.pm.install} "${a.pkg}@${a.version}"`, { stdio: ["ignore", "inherit", "inherit"], encoding: undefined });
+  if (inst.code !== 0) die(`${a.pm.install} failed`);
   const newVersion = currentVersion(a.pkg) || a.version;
 
   let result = null;

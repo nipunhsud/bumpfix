@@ -78,6 +78,33 @@ bumpfix lodash --agent "claude -p --permission-mode acceptEdits"
 bumpfix lodash --agent "codex exec --full-auto -"
 ```
 
+## GitHub Action (the Dependabot-replacement mode)
+
+Dependabot opens red PRs on a schedule. This opens green ones:
+
+```yaml
+name: weekly-upgrades
+on:
+  schedule: [{ cron: "0 6 * * 1" }]
+  workflow_dispatch:
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    permissions: { contents: write, pull-requests: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: nipunhsud/bumpfix@main
+        with:
+          package: react@19          # or matrix over several packages
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+```
+
+If the migration can't reach green, the job fails and nothing is opened —
+you get silence instead of a red PR to babysit.
+
 ## Why
 
 - Security patching and dependency maintenance is the #1 reported pain in the

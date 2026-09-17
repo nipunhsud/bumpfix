@@ -1,0 +1,42 @@
+name: bumpfix
+description: Upgrade a dependency and migrate breaking changes behind your test gate, then open a green PR
+branding: { icon: git-pull-request, color: green }
+inputs:
+  package:
+    description: Package to upgrade, e.g. react@19 (version optional)
+    required: true
+  test:
+    description: Test command gate (default = auto; npm test, or the build script if no tests)
+    required: false
+    default: ""
+  max-iters:
+    description: Max agent fix attempts
+    required: false
+    default: "3"
+  workspaces:
+    description: Also bump the package in every workspace subpackage ("true"/"false")
+    required: false
+    default: "false"
+  anthropic-api-key:
+    description: API key for the default Claude Code agent
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install bumpfix and Claude Code
+      shell: bash
+      run: npm install -g github:nipunhsud/bumpfix @anthropic-ai/claude-code
+    - name: Configure git identity
+      shell: bash
+      run: |
+        git config user.name "bumpfix"
+        git config user.email "bumpfix[bot]@users.noreply.github.com"
+    - name: Upgrade and migrate
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        ARGS=(--max-iters "${{ inputs.max-iters }}" --pr)
+        [ -n "${{ inputs.test }}" ] && ARGS+=(--test "${{ inputs.test }}")
+        [ "${{ inputs.workspaces }}" = "true" ] && ARGS+=(--workspaces)
+        bumpfix "${{ inputs.package }}" "${ARGS[@]}"

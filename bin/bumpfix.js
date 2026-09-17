@@ -34,7 +34,7 @@ function parseArgs(argv) {
     const v = argv[i];
     if (v === "--test") a.test = argv[++i];
     else if (v === "--agent") a.agent = argv[++i];
-    else if (v === "--max-iters") a.maxIters = parseInt(argv[++i], 10) || 3;
+    else if (v === "--max-iters") { const n = parseInt(argv[++i], 10); a.maxIters = Number.isNaN(n) || n < 0 ? 3 : n; }
     else if (v === "--pr") a.pr = true;
     else if (v === "--no-branch") a.branch = false;
     else if (v === "-h" || v === "--help") { console.log(HELP); process.exit(0); }
@@ -44,6 +44,8 @@ function parseArgs(argv) {
   const at = rest[0].lastIndexOf("@");
   a.pkg = at > 0 ? rest[0].slice(0, at) : rest[0];
   a.version = at > 0 ? rest[0].slice(at + 1) : "latest";
+  if (!/^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(a.pkg)) die(`invalid package name: ${a.pkg}`);
+  if (!/^[\w.^~<>=*|+ -]+$/.test(a.version)) die(`invalid version spec: ${a.version}`);
   return a;
 }
 
@@ -64,7 +66,7 @@ function main() {
   if (run("git status --porcelain").out.trim() !== "") die("working tree not clean — commit or stash first");
 
   const oldVersion = currentVersion(a.pkg) || "(not yet a dependency)";
-  const branch = `bumpfix/${a.pkg.replace(/[^a-zA-Z0-9._-]/g, "-")}-${a.version}`;
+  const branch = "bumpfix/" + `${a.pkg}-${a.version}`.replace(/[^a-zA-Z0-9._-]/g, "-");
   if (a.branch) {
     if (run(`git checkout -b "${branch}"`).code !== 0) die(`could not create branch ${branch} (already exists?)`);
     console.log(`→ branch ${branch}`);

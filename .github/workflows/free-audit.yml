@@ -62,6 +62,8 @@ jobs:
           git config user.email "bumpwright[bot]@users.noreply.github.com"
           if [ -f pnpm-lock.yaml ]; then corepack enable 2>/dev/null; pnpm install --frozen-lockfile || pnpm install
           elif [ -f package.json ]; then npm ci || npm install
+          elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+            python3 -m pip install --quiet pip-audit uv
           fi
           T="${{ steps.req.outputs.test }}"
           if [ -n "$T" ]; then node ../bin/bumpwright.js audit --max-iters 0 --test "$T" > ../audit.log 2>&1
@@ -85,8 +87,10 @@ jobs:
               PRS=$(printf '%s\n- `%s` pushed to the fork — admin request, no PR opened on `%s` (open manually if wanted)' "$PRS" "$B" "$REPO")
             fi
           done
-          SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|committed upgrade|committed npm audit fix|safely change" ../audit.log | sort -u | head -10 | sed 's/^/> /')
-          OUT=$(printf '**bumpwright free audit of `%s`**\n\n%s\n' "$REPO" "${SUMMARY:-'> (no findings output)'}")
+          SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|committed upgrade|committed npm audit fix|safely change|^bumpwright:" ../audit.log | sort -u | head -10 | sed 's/^/> /')
+          [ -z "$SUMMARY" ] && SUMMARY="> (no findings output — tail of log)
+$(tail -3 ../audit.log | sed 's/^/> /')"
+          OUT=$(printf '**bumpwright free audit of `%s`**\n\n%s\n' "$REPO" "$SUMMARY")
           [ -n "$PRS" ] && OUT=$(printf '%s\n**Green upgrade PRs opened:**%s\n' "$OUT" "$PRS")
           OUT=$(printf '%s\nRed results need real migration work — run `bumpwright <pkg>` locally with an agent for those.' "$OUT")
           GH_TOKEN=${{ github.token }} gh issue comment "$ISSUE" -R "${{ github.repository }}" -b "$OUT"

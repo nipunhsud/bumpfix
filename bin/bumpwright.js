@@ -32,7 +32,9 @@ function run(cmd, opts = {}) {
 function die(msg) { console.error(`bumpwright: ${msg}`); process.exit(1); }
 
 function parseArgs(argv) {
-  const pm = isPython() ? { install: "(py)", test: "pytest", sync: pyUsesUv() ? "uv sync" : (fs.existsSync("requirements.txt") ? "python3 -m pip install -r requirements.txt" : "true"), py: true } : detectPm();
+  const pm = isPython() ? { install: "(py)", test: "pytest", sync: pyUsesUv() ? "uv sync" : (fs.existsSync("requirements.txt") ? "python3 -m pip install -r requirements.txt" : "true"), py: true }
+    : isGo() ? { install: "(go)", test: "go test ./...", sync: "true", go: true }
+    : detectPm();
   const a = { pm, test: pm.test, agent: "claude -p --permission-mode acceptEdits", maxIters: 3, pr: false, branch: true };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
@@ -50,7 +52,9 @@ function parseArgs(argv) {
   const at = rest[0].lastIndexOf("@");
   a.pkg = at > 0 ? rest[0].slice(0, at) : rest[0];
   a.version = at > 0 ? rest[0].slice(at + 1) : "latest";
-  if (!/^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(a.pkg)) die(`invalid package name: ${a.pkg}`);
+  if (isGo()) {
+    if (!/^[A-Za-z0-9._~\/-]+$/.test(a.pkg)) die(`invalid module path: ${a.pkg}`);
+  } else if (!/^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i.test(a.pkg)) die(`invalid package name: ${a.pkg}`);
   if (!/^[\w.^~<>=*|+ -]+$/.test(a.version)) die(`invalid version spec: ${a.version}`);
   return a;
 }
@@ -78,6 +82,16 @@ function pyRecordRequirement(pkg, newVersion) {
   const txt = fs.readFileSync("requirements.txt", "utf8");
   if (re.test(txt)) fs.writeFileSync("requirements.txt", txt.replace(re, `${pkg}==${newVersion}`));
 }
+
+function isGo() {
+  return !fs.existsSync("package.json") && !isPython() && fs.existsSync("go.mod");
+}
+function goCurrentVersion(mod) {
+  const r = run(`go list -m "${mod}"`);
+  const m = r.out.trim().split(/\s+/);
+  return r.code === 0 && m[1] ? m[1] : null;
+}
+function goVersionSpec(v) { return v === "latest" ? "latest" : (/^\d/.test(v) ? `v${v}` : v); }
 
 function detectPm() {
   let d = process.cwd();
@@ -123,7 +137,7 @@ function workspaceDirs(pkg) {
   return dirs.length ? dirs : ["."];
 }
 
-function vtuple(v) { return String(v).split("-")[0].split(".").map((n) => parseInt(n, 10) || 0); }
+function vtuple(v) { return String(v).replace(/^v/, "").split("-")[0].split(".").map((n) => parseInt(n, 10) || 0); }
 function isDowngrade(fix, cur) {
   const [a, b] = [vtuple(fix), vtuple(cur)];
   for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0); }
@@ -285,6 +299,42 @@ function collectYarnAudit(counts) {
   return majors;
 }
 
+function jsonStream(text) {
+  // govulncheck -json emits a stream of pretty-printed JSON objects
+  const out = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{") { if (!depth) start = i; depth++; }
+    else if (c === "}") { depth--; if (!depth && start >= 0) { try { out.push(JSON.parse(text.slice(start, i + 1))); } catch { /* partial */ } start = -1; } }
+  }
+  return out;
+}
+
+function collectGoAudit(counts) {
+  const tool = run("command -v govulncheck").code === 0 ? "govulncheck" : "go run golang.org/x/vuln/cmd/govulncheck@latest";
+  console.log(`→ ${tool} -json ./...`);
+  const audit = run(`${tool} -json ./...`);
+  const objs = jsonStream(audit.out);
+  if (!objs.length) { console.error(audit.out.slice(-1500)); die("could not parse govulncheck output — is Go installed?"); }
+  const majors = new Map();
+  for (const o of objs) {
+    const f = o.finding;
+    if (!f || !f.fixed_version || !f.trace || !f.trace.length) continue;
+    const t0 = f.trace[0];
+    const mod = t0.module;
+    if (!mod) continue;
+    const cur = t0.version;
+    if (cur && isDowngrade(f.fixed_version, cur)) { counts.downgrades++; continue; }
+    // Go get raises transitive deps first-class — every fixable finding is a target
+    addTarget(majors, mod, f.fixed_version, "security", [`https://pkg.go.dev/vuln/${f.osv}`], counts);
+  }
+  console.log(`→ ${majors.size} reachable vulnerable module(s) with a fixed version (govulncheck is call-graph aware)`);
+  return majors;
+}
+
 function collectPyAudit(counts) {
   const tool = run("command -v pip-audit").code === 0 ? "pip-audit" : "uvx pip-audit";
   // Audit the project's own requirements, not whichever environment pip-audit runs in.
@@ -381,7 +431,7 @@ function fixMode(argv) {
 }
 
 function auditMode(argv) {
-  if (!fs.existsSync("package.json") && !isPython()) die("no package.json, pyproject.toml, or requirements.txt here — run from your project root");
+  if (!fs.existsSync("package.json") && !isPython() && !isGo()) die("no package.json, pyproject.toml/requirements.txt, or go.mod here — run from your project root");
   const passthrough = [];
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
@@ -402,6 +452,9 @@ function auditMode(argv) {
   } else if (fs.existsSync("yarn.lock")) {
     majors = collectYarnAudit(counts);
     sync = "yarn install --frozen-lockfile";
+  } else if (isGo()) {
+    majors = collectGoAudit(counts);
+    sync = "true"; // the module cache is content-addressed; restoring go.mod/go.sum restores everything
   } else {
     majors = collectNpmAudit(counts);
     sync = detectPm().sync;
@@ -482,11 +535,11 @@ function main() {
   if (process.argv[2] === "fix") return fixMode(process.argv.slice(3));
   const a = parseArgs(process.argv.slice(2));
 
-  if (!fs.existsSync("package.json") && !isPython()) die("no package.json, pyproject.toml, or requirements.txt here — run from your project root");
+  if (!fs.existsSync("package.json") && !isPython() && !isGo()) die("no package.json, pyproject.toml/requirements.txt, or go.mod here — run from your project root");
   if (run("git rev-parse --is-inside-work-tree").code !== 0) die("not a git repository");
   if (run("git status --porcelain").out.trim() !== "") die("working tree not clean — commit or stash first");
 
-  if (!a.testExplicit && !a.pm.py) {
+  if (!a.testExplicit && !a.pm.py && !a.pm.go) {
     const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
     const t = pj.scripts && pj.scripts.test;
     if ((!t || /no test specified/i.test(t)) && pj.scripts && pj.scripts.build) {
@@ -507,7 +560,7 @@ function main() {
 
   const targets = a.workspaces && !a.pm.py ? workspaceDirs(a.pkg) : ["."];
   if (a.workspaces && !a.pm.py) console.log(`→ workspaces declaring ${a.pkg}: ${targets.join(", ")}`);
-  const oldVersion = (a.pm.py ? pyCurrentVersion(a.pkg) : currentVersion(a.pkg, targets[0])) || "(not yet a dependency)";
+  const oldVersion = (a.pm.py ? pyCurrentVersion(a.pkg) : a.pm.go ? goCurrentVersion(a.pkg) : currentVersion(a.pkg, targets[0])) || "(not yet a dependency)";
   const branch = "bumpwright/" + `${a.pkg}-${a.version}`.replace(/[^a-zA-Z0-9._-]/g, "-").replace(/^-+/, "");
   if (a.branch) {
     if (run(`git checkout -b "${branch}"`).code !== 0) die(`could not create branch ${branch} (already exists?)`);
@@ -515,7 +568,12 @@ function main() {
   }
 
   const specs = [`${a.pkg}@${a.version}`];
-  if (a.pm.py) {
+  if (a.pm.go) {
+    const cmd = `go get "${a.pkg}@${goVersionSpec(a.version)}" && go mod tidy`;
+    console.log(`→ ${cmd}`);
+    const inst = run(cmd);
+    if (inst.code !== 0) { console.error(inst.out.slice(-3000)); die("install failed"); }
+  } else if (a.pm.py) {
     const cmd = pyInstallCmd(a.pkg, a.version);
     console.log(`→ ${cmd}`);
     const inst = run(cmd);
@@ -540,7 +598,7 @@ function main() {
       specs.push(companion);
     }
   }
-  const newVersion = (a.pm.py ? pyCurrentVersion(a.pkg) : currentVersion(a.pkg, targets[0])) || a.version;
+  const newVersion = (a.pm.py ? pyCurrentVersion(a.pkg) : a.pm.go ? goCurrentVersion(a.pkg) : currentVersion(a.pkg, targets[0])) || a.version;
 
   let result = null;
   for (let i = 0; i <= a.maxIters; i++) {

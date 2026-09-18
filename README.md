@@ -95,6 +95,21 @@ bumpwright requests@2.32.5 --test pytest
 
 `bumpwright audit` works here too, via pip-audit.
 
+## Go modules
+
+In a directory with `go.mod` (and no `package.json`):
+
+```
+bumpwright golang.org/x/text@0.21.0 --test "go test ./..."
+bumpwright audit
+```
+
+Audit is driven by **govulncheck**, Go's official scanner — it is call-graph
+aware, so only vulnerabilities your code actually reaches become targets.
+Fixes go through `go get module@fixed && go mod tidy`, which raises
+transitive dependencies first-class — Go needs no overrides mechanism.
+Default gate: `go test ./...`.
+
 ## Transitive vulnerabilities: `audit --overrides`
 
 Findings buried in transitive deps can't be fixed by a direct bump — only an

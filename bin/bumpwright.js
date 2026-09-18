@@ -277,7 +277,9 @@ function fixMode(argv) {
     else if (v === "--pr") a.pr = true;
   }
   if (run("git rev-parse --is-inside-work-tree").code !== 0) die("not a git repository");
-  if (run("git status --porcelain").out.trim() !== "") die("working tree not clean — commit or stash first");
+  // fix only ever touches the manifests, so untracked files (someone's WIP) are fine.
+  const dirty = run("git status --porcelain").out.split("\n").filter((l) => l.trim() && !l.startsWith("??"));
+  if (dirty.length) die("tracked files modified — commit or stash first");
   const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
   const t = pj.scripts && pj.scripts.test;
   if (a.test === "npm test" && (!t || /no test specified/i.test(t)) && pj.scripts && pj.scripts.build) {
@@ -304,7 +306,7 @@ function fixMode(argv) {
     run("git checkout -- .");
     die("npm audit fix broke the gate — reverted, nothing shipped");
   }
-  run("git add -A");
+  run("git add package.json package-lock.json npm-shrinkwrap.json 2>/dev/null");
   const msg = "Apply npm audit fix (non-breaking security updates)\n\nAll changes stay within existing semver ranges; the test gate ran green.\n\nAutomated by bumpwright.";
   if (run(`git commit -m "${msg}"`).code !== 0) die("git commit failed");
   console.log("✓ committed npm audit fix behind a green gate");

@@ -24,7 +24,7 @@ npm install --silent >/dev/null 2>&1
 # Fake agent: verifies the prompt arrived on stdin, then "fixes" the code.
 cat > agent.sh <<'AGENT'
 #!/usr/bin/env bash
-grep -q 'isarray' /dev/stdin || { echo "prompt missing package name" >&2; exit 1; }
+grep -q 'isarray' - || { echo "prompt missing package name" >&2; exit 1; }
 touch fixed.txt
 AGENT
 chmod +x agent.sh

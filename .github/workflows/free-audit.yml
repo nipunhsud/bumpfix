@@ -17,6 +17,7 @@ jobs:
       GH_TOKEN: ${{ secrets.SERVICE_PAT }}
       ISSUE: ${{ github.event.issue.number }}
       AUTHOR: ${{ github.event.issue.user.login }}
+      ASSOC: ${{ github.event.issue.author_association }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,13 +32,21 @@ jobs:
           REPO=$(printf '%s\n%s' "$TITLE" "$BODY" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | grep -v '^OWNER/REPO$' | head -1)
           [ -n "$REPO" ] || say "Couldn't find an owner/name repo in the request."
           OWNER=${REPO%%/*}
+          CONSENT=1
           if [ "$OWNER" != "$AUTHOR" ]; then
             # org repos: allow requests from PUBLIC members of the owning org
-            if ! gh api "orgs/$OWNER/public_members/$AUTHOR" --silent 2>/dev/null; then
+            if gh api "orgs/$OWNER/public_members/$AUTHOR" --silent 2>/dev/null; then
+              : # verified org member — consent holds
+            elif [ "$ASSOC" = "OWNER" ]; then
+              # service-admin request for a repo they don't own: audit and report,
+              # but PR creation on the target stays off (manual decision).
+              CONSENT=0
+            else
               say "This service audits repos you own, or org repos where you're a public member of \`$OWNER\` (you are \`$AUTHOR\`). Make your org membership public, or ask an org member to file the request."
             fi
           fi
           gh api "repos/$REPO" --jq .private | grep -q false || say "Public repos only."
+          echo "consent=$CONSENT" >> "$GITHUB_OUTPUT"
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           TEST=$(printf '%s' "$BODY" | awk '/Test command/{f=1;next} f&&NF{print;exit}' | tr -d '\r')
           echo "test=$TEST" >> "$GITHUB_OUTPUT"
@@ -69,8 +78,12 @@ jobs:
               "$(git log $B -1 --pretty=%b)" \
               "Opened by the free [bumpwright](https://github.com/nipunhsud/bumpwright) audit service at your request (nipunhsud/bumpwright#$ISSUE). Probe mode: version bumped, your own tests ran green, no AI code edits. Review like any PR." \
               "🤖 Generated with [Claude Code](https://claude.com/claude-code)")
-            URL=$(gh pr create --repo "$REPO" --head "$FORK_OWNER:$B" --title "$(git log $B -1 --pretty=%s)" --body "$PRBODY" 2>/dev/null)
-            [ -n "$URL" ] && PRS=$(printf '%s\n- %s' "$PRS" "$URL")
+            if [ "${{ steps.req.outputs.consent }}" = "1" ]; then
+              URL=$(gh pr create --repo "$REPO" --head "$FORK_OWNER:$B" --title "$(git log $B -1 --pretty=%s)" --body "$PRBODY" 2>/dev/null)
+              [ -n "$URL" ] && PRS=$(printf '%s\n- %s' "$PRS" "$URL")
+            else
+              PRS=$(printf '%s\n- `%s` pushed to the fork — admin request, no PR opened on `%s` (open manually if wanted)' "$PRS" "$B" "$REPO")
+            fi
           done
           SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|committed upgrade|committed npm audit fix|safely change" ../audit.log | sort -u | head -10 | sed 's/^/> /')
           OUT=$(printf '**bumpwright free audit of `%s`**\n\n%s\n' "$REPO" "${SUMMARY:-'> (no findings output)'}")

@@ -1,7 +1,7 @@
 name: free-audit
 on:
   issues:
-    types: [opened]
+    types: [opened, reopened]
 permissions:
   issues: write
   contents: read

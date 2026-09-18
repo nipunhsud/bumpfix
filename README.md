@@ -95,6 +95,18 @@ bumpwright requests@2.32.5 --test pytest
 
 `bumpwright audit` works here too, via pip-audit.
 
+## `bumpwright fix` — the non-breaking half
+
+```
+bumpwright fix [--test <cmd>] [--pr]
+```
+
+Everything `npm audit fix` can do within your existing semver ranges, done
+behind the guardrails: clean tree required, green baseline required, own
+branch, and if the fixes break your gate they're reverted and nothing ships.
+One commit clearing every mechanical vulnerability. The free audit service
+runs this automatically and opens the PR.
+
 ## Security mode: `bumpwright audit`
 
 The vulnerabilities nobody patches are the ones where the fix needs a breaking

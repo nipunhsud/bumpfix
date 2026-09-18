@@ -7,6 +7,7 @@ const path = require("path");
 
 const HELP = `bumpwright <package>[@version] [options]
        bumpwright audit [options]      Fix every vulnerability that needs a breaking upgrade
+       bumpwright fix [options]        Apply npm audit fix behind your test gate (non-breaking)
 
 Upgrades an npm dependency, runs your tests, and if they break, drives a
 coding agent to migrate your calling code until they pass again.
@@ -167,7 +168,7 @@ function collectNpmAudit(counts) {
     if (f === true || !f.isSemVerMajor) { counts.fixable++; continue; }
     addTarget(majors, f.name, f.version, v.severity, advisoriesOf(v), counts);
   }
-  if (counts.fixable) console.log(`→ ${counts.fixable} finding(s) fixable without a major bump — run \`npm audit fix\` for those`);
+  if (counts.fixable) console.log(`→ ${counts.fixable} finding(s) fixable without a major bump — \`bumpwright fix\` applies them behind your test gate`);
   return majors;
 }
 
@@ -264,6 +265,57 @@ function collectPyAudit(counts) {
   return majors;
 }
 
+function fixMode(argv) {
+  if (!fs.existsSync("package.json")) die("no package.json here — run from your project root");
+  if (fs.existsSync("pnpm-lock.yaml") || fs.existsSync("yarn.lock"))
+    die("`fix` is npm-only for now — pnpm/yarn have no safe audit-fix equivalent");
+  const a = { test: "npm test", branch: true, pr: false };
+  for (let i = 0; i < argv.length; i++) {
+    const v = argv[i];
+    if (v === "--test") a.test = argv[++i];
+    else if (v === "--no-branch") a.branch = false;
+    else if (v === "--pr") a.pr = true;
+  }
+  if (run("git rev-parse --is-inside-work-tree").code !== 0) die("not a git repository");
+  if (run("git status --porcelain").out.trim() !== "") die("working tree not clean — commit or stash first");
+  const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const t = pj.scripts && pj.scripts.test;
+  if (a.test === "npm test" && (!t || /no test specified/i.test(t)) && pj.scripts && pj.scripts.build) {
+    a.test = "npm run build";
+    console.log(`→ no test script; using the build as the gate: ${a.test}`);
+  }
+  console.log(`→ baseline: ${a.test}`);
+  const base = run(a.test);
+  if (base.code !== 0) { console.error(base.out.slice(-2000)); die(`the gate "${a.test}" is already red — fix that first`); }
+  if (a.branch) {
+    if (run("git checkout -b bumpwright/audit-fix").code !== 0) die("could not create branch bumpwright/audit-fix (already exists?)");
+    console.log("→ branch bumpwright/audit-fix");
+  }
+  console.log("→ npm audit fix");
+  run("npm audit fix");
+  if (run("git status --porcelain").out.trim() === "") {
+    console.log("✓ nothing npm audit fix could safely change");
+    process.exit(0);
+  }
+  console.log(`→ ${a.test}`);
+  const after = run(a.test);
+  if (after.code !== 0) {
+    console.error(after.out.slice(-3000));
+    run("git checkout -- .");
+    die("npm audit fix broke the gate — reverted, nothing shipped");
+  }
+  run("git add -A");
+  const msg = "Apply npm audit fix (non-breaking security updates)\n\nAll changes stay within existing semver ranges; the test gate ran green.\n\nAutomated by bumpwright.";
+  if (run(`git commit -m "${msg}"`).code !== 0) die("git commit failed");
+  console.log("✓ committed npm audit fix behind a green gate");
+  if (a.pr) {
+    if (run("git push -u origin bumpwright/audit-fix").code !== 0) die("git push failed");
+    const pr = run("gh pr create --fill", { stdio: ["ignore", "inherit", "inherit"], encoding: undefined });
+    if (pr.code !== 0) die("gh pr create failed");
+  }
+  process.exit(0);
+}
+
 function auditMode(argv) {
   if (!fs.existsSync("package.json") && !isPython()) die("no package.json, pyproject.toml, or requirements.txt here — run from your project root");
   const passthrough = [];
@@ -306,6 +358,7 @@ function auditMode(argv) {
 
 function main() {
   if (process.argv[2] === "audit") return auditMode(process.argv.slice(3));
+  if (process.argv[2] === "fix") return fixMode(process.argv.slice(3));
   const a = parseArgs(process.argv.slice(2));
 
   if (!fs.existsSync("package.json") && !isPython()) die("no package.json, pyproject.toml, or requirements.txt here — run from your project root");

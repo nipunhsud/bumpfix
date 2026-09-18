@@ -55,6 +55,7 @@ jobs:
           if [ -n "$T" ]; then node ../bin/bumpwright.js audit --max-iters 0 --test "$T" > ../audit.log 2>&1
           else node ../bin/bumpwright.js audit --max-iters 0 > ../audit.log 2>&1
           fi
+          node ../bin/bumpwright.js fix >> ../audit.log 2>&1
           gh repo fork "$REPO" --clone=false 2>/dev/null; sleep 5
           FORK_OWNER=$(gh api user --jq .login)
           PRS=""
@@ -68,7 +69,7 @@ jobs:
             URL=$(gh pr create --repo "$REPO" --head "$FORK_OWNER:$B" --title "$(git log $B -1 --pretty=%s)" --body "$PRBODY" 2>/dev/null)
             [ -n "$URL" ] && PRS=$(printf '%s\n- %s' "$PRS" "$URL")
           done
-          SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|committed upgrade" ../audit.log | sort -u | head -10 | sed 's/^/> /')
+          SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|committed upgrade|committed npm audit fix|safely change" ../audit.log | sort -u | head -10 | sed 's/^/> /')
           OUT=$(printf '**bumpwright free audit of `%s`**\n\n%s\n' "$REPO" "${SUMMARY:-'> (no findings output)'}")
           [ -n "$PRS" ] && OUT=$(printf '%s\n**Green upgrade PRs opened:**%s\n' "$OUT" "$PRS")
           OUT=$(printf '%s\nRed results need real migration work — run `bumpwright <pkg>` locally with an agent for those.' "$OUT")

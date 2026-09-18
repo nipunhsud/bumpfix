@@ -43,3 +43,17 @@ BR=$(git branch --list 'bumpwright/six-*' --format='%(refname:short)' | head -1)
 git show "$BR:requirements.txt" | grep -q 'six==1.16.0' || { echo "FAIL: six not bumped: $(git show "$BR:requirements.txt")"; exit 1; }
 git log "$BR" -1 --pretty=%B | grep -q "osv.dev/vulnerability/PYSEC-TEST-1" || { echo "FAIL: no OSV advisory in commit"; exit 1; }
 echo "PIP AUDIT OK"
+
+# --- --overrides: transitive vuln (mkdirp 0.5.1 bundles vulnerable minimist) pinned at patched floor ---
+mkdir "$TMP/tx" && cd "$TMP/tx"
+git init -q -b main && git config user.email t@t && git config user.name t
+printf '{ "name":"tx","private":true,"dependencies":{"mkdirp":"0.5.1"},"scripts":{"test":"exit 0"} }' > package.json
+pnpm install --silent >/dev/null 2>&1
+printf 'node_modules/\n' > .gitignore
+git add -A && git commit -qm init
+node "$BW" audit --overrides >/dev/null 2>&1 || { echo "FAIL: overrides run failed"; exit 1; }
+git rev-parse --verify -q bumpwright/security-overrides >/dev/null || { echo "FAIL: no overrides branch"; exit 1; }
+git show bumpwright/security-overrides:package.json | grep -q '"minimist": "\^0\.' || { echo "FAIL: override not written"; exit 1; }
+git log bumpwright/security-overrides -1 --pretty=%B | grep -q "TEMPORARY" || { echo "FAIL: no temporary label"; exit 1; }
+git log bumpwright/security-overrides -1 --pretty=%B | grep -q "github.com/advisories" || { echo "FAIL: no advisory links"; exit 1; }
+echo "OVERRIDES OK"

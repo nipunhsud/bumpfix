@@ -95,6 +95,22 @@ bumpwright requests@2.32.5 --test pytest
 
 `bumpwright audit` works here too, via pip-audit.
 
+## Transitive vulnerabilities: `audit --overrides`
+
+Findings buried in transitive deps can't be fixed by a direct bump — only an
+override or an upstream release. Opt in and bumpwright pins each vulnerable
+transitive to its patched floor (npm `overrides` / `pnpm.overrides`),
+reinstalls, and runs your gate:
+
+```
+bumpwright audit --overrides [--pr]
+```
+
+Green → one commit, explicitly labeled **TEMPORARY**, listing every pin with
+its advisory and the instruction to remove it once the parent updates. Red →
+reverted, nothing ships. Off by default because overrides are debt — this
+makes the debt visible, gated, and removable instead of silent.
+
 ## `bumpwright fix` — the non-breaking half
 
 ```

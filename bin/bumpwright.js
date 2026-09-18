@@ -8,6 +8,7 @@ const path = require("path");
 const HELP = `bumpwright <package>[@version] [options]
        bumpwright audit [options]      Fix every vulnerability that needs a breaking upgrade
        bumpwright fix [options]        Apply npm audit fix behind your test gate (non-breaking)
+       bumpwright audit --overrides    Also pin vulnerable TRANSITIVE deps to patched floors (temporary, gated)
 
 Upgrades an npm dependency, runs your tests, and if they break, drives a
 coding agent to migrate your calling code until they pass again.
@@ -132,6 +133,14 @@ function installedVersion(name) {
   try { return JSON.parse(fs.readFileSync(path.join("node_modules", name, "package.json"), "utf8")).version; }
   catch { return null; }
 }
+function addTx(counts, name, version, advisories) {
+  counts.txTargets = counts.txTargets || new Map();
+  const e = counts.txTargets.get(name) || { version, advisories: [] };
+  if (isDowngrade(e.version, version)) e.version = version;
+  e.advisories.push(...advisories);
+  counts.txTargets.set(name, e);
+}
+
 function addTarget(majors, name, version, severity, advisories, counts) {
   const cur = installedVersion(name);
   if (cur && isDowngrade(version, cur)) {
@@ -164,7 +173,14 @@ function collectNpmAudit(counts) {
   const majors = new Map();
   for (const v of Object.values(vulns)) {
     const f = v.fixAvailable;
-    if (!f) continue;
+    if (!f) {
+      // no computed fix: candidate for a transitive override at the patched floor
+      const uppers = (v.via || []).filter((x) => typeof x === "object")
+        .flatMap((x) => [...String(x.range || "").matchAll(/<\s*([\d.]+)/g)].map((m) => m[1]));
+      if (uppers.length) addTx(counts, v.name, uppers.sort((a, b) => (isDowngrade(a, b) ? -1 : 1)).pop(), (v.via || []).filter((x) => typeof x === "object").map((x) => x.url).filter(Boolean));
+      counts.transitive++;
+      continue;
+    }
     if (f === true || !f.isSemVerMajor) { counts.fixable++; continue; }
     addTarget(majors, f.name, f.version, v.severity, advisoriesOf(v), counts);
   }
@@ -206,7 +222,12 @@ function collectPnpmAudit(counts) {
   const majors = new Map();
   for (const adv of Object.values(report.advisories || {})) {
     const name = adv.module_name;
-    if (!direct.has(name)) { counts.transitive++; continue; }
+    if (!direct.has(name)) {
+      const fl = [...String(adv.patched_versions || "").matchAll(/>=\s*([\d.]+)/g)].map((x) => x[1]);
+      if (fl.length) addTx(counts, name, fl.sort((a, b) => (isDowngrade(a, b) ? -1 : 1)).pop(), [adv.url].filter(Boolean));
+      counts.transitive++;
+      continue;
+    }
     const spec = String(direct.get(name).spec || "");
     if (/^(workspace|file|link|portal|git|github):/.test(spec)) {
       // an internal workspace link or non-registry dep — only an upstream release fixes this
@@ -331,6 +352,9 @@ function auditMode(argv) {
     if (["--test", "--agent", "--max-iters"].includes(v)) passthrough.push(v, argv[++i]);
     else if (["--pr", "--no-branch", "--workspaces"].includes(v)) passthrough.push(v);
   }
+  let useOverrides = false;
+  const oi = argv.indexOf("--overrides");
+  if (oi >= 0) { useOverrides = true; argv.splice(oi, 1); }
   const counts = { fixable: 0, downgrades: 0, transitive: 0 };
   let majors, sync;
   if (isPython()) {
@@ -344,7 +368,10 @@ function auditMode(argv) {
     sync = detectPm().sync;
   }
   if (counts.downgrades) console.log(`→ ${counts.downgrades} proposed fix(es) skipped as downgrades`);
-  if (!majors.size) { console.log("✓ no vulnerabilities need a breaking upgrade"); process.exit(0); }
+  const txT = (useOverrides && counts.txTargets) || new Map();
+  if (counts.transitive && !useOverrides && !isPython())
+    console.log("→ re-run with --overrides to pin transitive patched floors behind your gate (temporary, removable)");
+  if (!majors.size && !txT.size) { console.log("✓ no vulnerabilities need a breaking upgrade"); process.exit(0); }
   const start = run("git rev-parse --abbrev-ref HEAD").out.trim();
   let failed = 0;
   for (const [name, info] of majors) {
@@ -359,7 +386,51 @@ function auditMode(argv) {
     console.log("→ resyncing installed packages to the lockfile");
     run(sync);
   }
-  console.log(failed ? `\n✗ ${failed}/${majors.size} security upgrades did not reach green` : `\n✓ all ${majors.size} security upgrades green`);
+  if (txT.size) {
+    const isPnpm = fs.existsSync("pnpm-lock.yaml");
+    console.log(`\n=== security overrides for ${txT.size} transitive dep(s) ===`);
+    let testCmd = null;
+    const ti = argv.indexOf("--test");
+    if (ti >= 0) testCmd = argv[ti + 1];
+    if (!testCmd) {
+      const pj0 = JSON.parse(fs.readFileSync("package.json", "utf8"));
+      const t0 = pj0.scripts && pj0.scripts.test;
+      testCmd = (!t0 || /no test specified/i.test(t0)) && pj0.scripts && pj0.scripts.build
+        ? `${isPnpm ? "pnpm" : "npm"} run build` : `${isPnpm ? "pnpm" : "npm"} test`;
+    }
+    console.log(`→ baseline: ${testCmd}`);
+    const base = run(testCmd);
+    if (base.code !== 0) { console.error(base.out.slice(-1500)); console.error("bumpwright: gate already red — overrides not attempted"); failed++; }
+    else if (run("git checkout -b bumpwright/security-overrides").code !== 0) { console.error("bumpwright: branch bumpwright/security-overrides already exists"); failed++; }
+    else {
+      const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
+      const dest = isPnpm ? ((pj.pnpm = pj.pnpm || {}), (pj.pnpm.overrides = pj.pnpm.overrides || {}), pj.pnpm.overrides) : (pj.overrides = pj.overrides || {});
+      const lines = [];
+      for (const [n, info] of txT) { dest[n] = `^${info.version}`; lines.push(`- ${n} -> ^${info.version} (${[...new Set(info.advisories)].join(", ") || "audit finding"})`); }
+      fs.writeFileSync("package.json", JSON.stringify(pj, null, 2) + "\n");
+      const inst = run(isPnpm ? "pnpm install" : "npm install");
+      const after = inst.code === 0 ? run(testCmd) : inst;
+      if (after.code !== 0) {
+        console.error(after.out.slice(-2500));
+        run(`git checkout -f "${start}"`); run("git checkout -- ."); run(sync);
+        console.error("bumpwright: overrides broke the gate — reverted, nothing shipped");
+        failed++;
+      } else {
+        run("git add -A");
+        const msg = `Security overrides (TEMPORARY) for vulnerable transitive deps\n\n${lines.join("\n")}\n\nThese pins force patched versions that the direct parents do not yet require. Remove each override once its parent updates. Gate '${testCmd}' ran green with the pins applied.\n\nAutomated by bumpwright.`;
+        if (run(`git commit -m "${msg.replace(/"/g, '\\"')}"`).code !== 0) { console.error("bumpwright: commit failed"); failed++; }
+        else {
+          console.log(`✓ committed ${txT.size} security override(s) behind a green gate`);
+          if (argv.includes("--pr")) {
+            if (run("git push -u origin bumpwright/security-overrides").code !== 0) { console.error("bumpwright: push failed"); failed++; }
+            else if (run("gh pr create --fill", { stdio: ["ignore", "inherit", "inherit"], encoding: undefined }).code !== 0) { console.error("bumpwright: gh pr create failed"); failed++; }
+          }
+        }
+      }
+    }
+  }
+  const total = majors.size + (txT.size ? 1 : 0);
+  console.log(failed ? `\n✗ ${failed}/${total} security upgrades did not reach green` : `\n✓ all ${total} security upgrades green`);
   process.exit(failed ? 1 : 0);
 }
 

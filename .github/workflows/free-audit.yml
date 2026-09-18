@@ -69,7 +69,7 @@ jobs:
           if [ -n "$T" ]; then node ../bin/bumpwright.js audit --max-iters 0 --test "$T" > ../audit.log 2>&1
           else node ../bin/bumpwright.js audit --max-iters 0 > ../audit.log 2>&1
           fi
-          [ -f package.json ] && node ../bin/bumpwright.js fix >> ../audit.log 2>&1
+          [ -f package-lock.json ] && node ../bin/bumpwright.js fix >> ../audit.log 2>&1
           gh repo fork "$REPO" --clone=false 2>/dev/null; sleep 5
           FORK_OWNER=$(gh api user --jq .login)
           PRS=""

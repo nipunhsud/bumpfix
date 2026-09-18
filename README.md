@@ -178,6 +178,15 @@ workspaces, companion bumps, an MCP server, and agent-agnostic drivers.
 
 MIT
 
+## Free audit service
+
+Don't want to install anything? [Open an issue](https://github.com/nipunhsud/bumpwright/issues/new?template=free-audit.yml)
+naming a public repo you own. The service clones it, probes every vulnerability
+whose fix needs a real version bump, and opens green upgrade PRs on your repo —
+your own tests are the gate, red never ships. Findings that need actual
+migration work come back as a report on the issue instead. Free, probe-mode
+only (no AI edits), powered by GitHub Actions.
+
 ## Use with LLM coding tools
 
 **Claude Code (or any agent with a shell):** no integration needed. Install

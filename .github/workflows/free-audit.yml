@@ -27,8 +27,8 @@ jobs:
           TITLE: ${{ github.event.issue.title }}
           BODY: ${{ github.event.issue.body }}
         run: |
-          REPO=$(printf '%s\n%s' "$TITLE" "$BODY" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | grep -v '^OWNER/REPO$' | head -1)
           say() { GH_TOKEN=${{ github.token }} gh issue comment "$ISSUE" -R "${{ github.repository }}" -b "$1"; }
+          REPO=$(printf '%s\n%s' "$TITLE" "$BODY" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | grep -v '^OWNER/REPO$' | head -1)
           [ -n "$REPO" ] || { say "Couldn't find an owner/name repo in the request."; exit 1; }
           OWNER=${REPO%%/*}
           if [ "$OWNER" != "$AUTHOR" ]; then
@@ -39,13 +39,13 @@ jobs:
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           TEST=$(printf '%s' "$BODY" | awk '/Test command/{f=1;next} f&&NF{print;exit}' | tr -d '\r')
           echo "test=$TEST" >> "$GITHUB_OUTPUT"
-      - name: Audit (probe mode — no agent, red never ships)
+      - name: Audit (probe mode, no agent, red never ships)
         run: |
           set +e
           REPO="${{ steps.req.outputs.repo }}"
           NAME=${REPO##*/}
           git clone -q "https://github.com/$REPO.git" target
-          cd target
+          cd target || exit 1
           git config user.name "bumpwright"
           git config user.email "bumpwright[bot]@users.noreply.github.com"
           if [ -f pnpm-lock.yaml ]; then corepack enable 2>/dev/null; pnpm install --frozen-lockfile || pnpm install
@@ -61,15 +61,15 @@ jobs:
           for B in $(git branch --list 'bumpwright/*' --format='%(refname:short)'); do
             [ "$(git rev-list --count origin/HEAD..$B 2>/dev/null)" -gt 0 ] || continue
             git push -q "https://github.com/$FORK_OWNER/$NAME.git" "$B" || continue
-            URL=$(gh pr create --repo "$REPO" --head "$FORK_OWNER:$B" --fill --body "$(git log $B -1 --pretty=%b)
-
-Opened by the free [bumpwright](https://github.com/nipunhsud/bumpwright) audit service at your request (#$ISSUE). Probe mode: version bumped, your own tests run green, no AI code edits. Review like any PR.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)" 2>/dev/null)
-            [ -n "$URL" ] && PRS="$PRS\n- $URL"
+            PRBODY=$(printf '%s\n\n%s\n\n%s' \
+              "$(git log $B -1 --pretty=%b)" \
+              "Opened by the free [bumpwright](https://github.com/nipunhsud/bumpwright) audit service at your request (nipunhsud/bumpwright#$ISSUE). Probe mode: version bumped, your own tests ran green, no AI code edits. Review like any PR." \
+              "🤖 Generated with [Claude Code](https://claude.com/claude-code)")
+            URL=$(gh pr create --repo "$REPO" --head "$FORK_OWNER:$B" --title "$(git log $B -1 --pretty=%s)" --body "$PRBODY" 2>/dev/null)
+            [ -n "$URL" ] && PRS=$(printf '%s\n- %s' "$PRS" "$URL")
           done
-          SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|✓|✗" ../audit.log | sort -u | head -10 | sed 's/^/> /')
-          BODY_OUT="**bumpwright free audit of \`$REPO\`**\n\n${SUMMARY:-> (no findings output)}\n"
-          [ -n "$PRS" ] && BODY_OUT="$BODY_OUT\n**Green upgrade PRs opened:**$PRS\n"
-          BODY_OUT="$BODY_OUT\nRed results mean the upgrade needs real migration work — run \`bumpwright <pkg>\` locally with an agent for those."
-          GH_TOKEN=${{ github.token }} gh issue comment "$ISSUE" -R "${{ github.repository }}" -b "$(printf "$BODY_OUT")"
+          SUMMARY=$(grep -E "no vulnerabilities|fixable without|downgrade|transitive|already red|committed upgrade" ../audit.log | sort -u | head -10 | sed 's/^/> /')
+          OUT=$(printf '**bumpwright free audit of `%s`**\n\n%s\n' "$REPO" "${SUMMARY:-'> (no findings output)'}")
+          [ -n "$PRS" ] && OUT=$(printf '%s\n**Green upgrade PRs opened:**%s\n' "$OUT" "$PRS")
+          OUT=$(printf '%s\nRed results need real migration work — run `bumpwright <pkg>` locally with an agent for those.' "$OUT")
+          GH_TOKEN=${{ github.token }} gh issue comment "$ISSUE" -R "${{ github.repository }}" -b "$OUT"

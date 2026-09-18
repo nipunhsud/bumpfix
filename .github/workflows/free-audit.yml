@@ -27,19 +27,19 @@ jobs:
           TITLE: ${{ github.event.issue.title }}
           BODY: ${{ github.event.issue.body }}
         run: |
-          say() { GH_TOKEN=${{ github.token }} gh issue comment "$ISSUE" -R "${{ github.repository }}" -b "$1"; }
+          say() { GH_TOKEN=${{ github.token }} gh issue comment "$ISSUE" -R "${{ github.repository }}" -b "$1"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; }
           REPO=$(printf '%s\n%s' "$TITLE" "$BODY" | grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' | grep -v '^OWNER/REPO$' | head -1)
-          [ -n "$REPO" ] || { say "Couldn't find an owner/name repo in the request."; exit 1; }
+          [ -n "$REPO" ] || say "Couldn't find an owner/name repo in the request."
           OWNER=${REPO%%/*}
           if [ "$OWNER" != "$AUTHOR" ]; then
             say "This free service only audits repos you own (requested \`$REPO\`, you are \`$AUTHOR\`)."
-            exit 1
           fi
-          gh api "repos/$REPO" --jq .private | grep -q false || { say "Public repos only."; exit 1; }
+          gh api "repos/$REPO" --jq .private | grep -q false || say "Public repos only."
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           TEST=$(printf '%s' "$BODY" | awk '/Test command/{f=1;next} f&&NF{print;exit}' | tr -d '\r')
           echo "test=$TEST" >> "$GITHUB_OUTPUT"
       - name: Audit (probe mode, no agent, red never ships)
+        if: steps.req.outputs.skip != '1'
         run: |
           set +e
           REPO="${{ steps.req.outputs.repo }}"

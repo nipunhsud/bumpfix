@@ -61,6 +61,7 @@ jobs:
           git config user.name "bumpwright"
           git config user.email "bumpwright[bot]@users.noreply.github.com"
           if [ -f pnpm-lock.yaml ]; then corepack enable 2>/dev/null; pnpm install --frozen-lockfile || pnpm install
+          elif [ -f yarn.lock ]; then yarn install --frozen-lockfile || yarn install
           elif [ -f package.json ]; then npm ci || npm install
           elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
             python3 -m pip install --quiet pip-audit uv

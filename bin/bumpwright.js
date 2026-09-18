@@ -253,6 +253,38 @@ function collectPnpmAudit(counts) {
   return majors;
 }
 
+function collectYarnAudit(counts) {
+  if (fs.existsSync(".yarnrc.yml")) die("yarn berry (v2+) isn't supported yet — classic yarn.lock only");
+  console.log("→ yarn audit --json");
+  const audit = run("yarn audit --json");
+  const majors = new Map();
+  const seenDirect = new Set();
+  for (const line of audit.out.split("\n")) {
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (!msg || msg.type !== "auditAdvisory") continue;
+    const a = msg.data && msg.data.advisory;
+    if (!a) continue;
+    const name = a.module_name;
+    const floors = [...String(a.patched_versions || "").matchAll(/>=\s*([\d.]+)/g)].map((x) => x[1]);
+    if (!floors.length) { counts.transitive++; continue; }
+    const floor = floors.sort((x, y) => (isDowngrade(x, y) ? -1 : 1)).pop();
+    const findings = a.findings || [];
+    const direct = findings.some((f) => (f.paths || []).some((pth) => pth === name));
+    const cur = findings.flatMap((f) => [f.version]).filter(Boolean)
+      .sort((x, y) => (isDowngrade(x, y) ? -1 : 1)).pop() || installedVersion(name);
+    if (cur && isDowngrade(floor, cur)) { counts.downgrades++; continue; }
+    if (direct) {
+      addTarget(majors, name, floor, a.severity || "security", [a.url].filter(Boolean), counts);
+      seenDirect.add(name);
+    } else if (!seenDirect.has(name)) {
+      addTx(counts, name, floor, [a.url].filter(Boolean));
+      counts.transitive++;
+    }
+  }
+  return majors;
+}
+
 function collectPyAudit(counts) {
   const tool = run("command -v pip-audit").code === 0 ? "pip-audit" : "uvx pip-audit";
   // Audit the project's own requirements, not whichever environment pip-audit runs in.
@@ -293,7 +325,7 @@ function collectPyAudit(counts) {
 function fixMode(argv) {
   if (!fs.existsSync("package.json")) die("no package.json here — run from your project root");
   if (fs.existsSync("pnpm-lock.yaml") || fs.existsSync("yarn.lock"))
-    die("`fix` is npm-only for now — pnpm/yarn have no safe audit-fix equivalent");
+    die("`fix` is npm-only — for pnpm/yarn run `bumpwright audit` (direct vulns get per-package branches; add --overrides for transitive)");
   const a = { test: "npm test", branch: true, pr: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
@@ -367,6 +399,9 @@ function auditMode(argv) {
   } else if (fs.existsSync("pnpm-lock.yaml")) {
     majors = collectPnpmAudit(counts);
     sync = "pnpm install --frozen-lockfile";
+  } else if (fs.existsSync("yarn.lock")) {
+    majors = collectYarnAudit(counts);
+    sync = "yarn install --frozen-lockfile";
   } else {
     majors = collectNpmAudit(counts);
     sync = detectPm().sync;
@@ -392,6 +427,8 @@ function auditMode(argv) {
   }
   if (txT.size) {
     const isPnpm = fs.existsSync("pnpm-lock.yaml");
+    const isYarn = !isPnpm && fs.existsSync("yarn.lock");
+    const pmName = isPnpm ? "pnpm" : isYarn ? "yarn" : "npm";
     console.log(`\n=== security overrides for ${txT.size} transitive dep(s) ===`);
     let testCmd = null;
     const ti = argv.indexOf("--test");
@@ -400,7 +437,7 @@ function auditMode(argv) {
       const pj0 = JSON.parse(fs.readFileSync("package.json", "utf8"));
       const t0 = pj0.scripts && pj0.scripts.test;
       testCmd = (!t0 || /no test specified/i.test(t0)) && pj0.scripts && pj0.scripts.build
-        ? `${isPnpm ? "pnpm" : "npm"} run build` : `${isPnpm ? "pnpm" : "npm"} test`;
+        ? `${pmName} run build` : `${pmName} test`;
     }
     console.log(`→ baseline: ${testCmd}`);
     const base = run(testCmd);
@@ -408,11 +445,13 @@ function auditMode(argv) {
     else if (run("git checkout -b bumpwright/security-overrides").code !== 0) { console.error("bumpwright: branch bumpwright/security-overrides already exists"); failed++; }
     else {
       const pj = JSON.parse(fs.readFileSync("package.json", "utf8"));
-      const dest = isPnpm ? ((pj.pnpm = pj.pnpm || {}), (pj.pnpm.overrides = pj.pnpm.overrides || {}), pj.pnpm.overrides) : (pj.overrides = pj.overrides || {});
+      const dest = isPnpm ? ((pj.pnpm = pj.pnpm || {}), (pj.pnpm.overrides = pj.pnpm.overrides || {}), pj.pnpm.overrides)
+        : isYarn ? (pj.resolutions = pj.resolutions || {})
+        : (pj.overrides = pj.overrides || {});
       const lines = [];
       for (const [n, info] of txT) { dest[n] = `^${info.version}`; lines.push(`- ${n} -> ^${info.version} (${[...new Set(info.advisories)].join(", ") || "audit finding"})`); }
       fs.writeFileSync("package.json", JSON.stringify(pj, null, 2) + "\n");
-      const inst = run(isPnpm ? "pnpm install" : "npm install");
+      const inst = run(isPnpm ? "pnpm install" : isYarn ? "yarn install" : "npm install");
       const after = inst.code === 0 ? run(testCmd) : inst;
       if (after.code !== 0) {
         console.error(after.out.slice(-2500));

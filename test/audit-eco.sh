@@ -57,3 +57,29 @@ git show bumpwright/security-overrides:package.json | grep -q '"minimist": "\^0\
 git log bumpwright/security-overrides -1 --pretty=%B | grep -q "TEMPORARY" || { echo "FAIL: no temporary label"; exit 1; }
 git log bumpwright/security-overrides -1 --pretty=%B | grep -q "github.com/advisories" || { echo "FAIL: no advisory links"; exit 1; }
 echo "OVERRIDES OK"
+
+# --- yarn classic: direct vuln gets its own branch via yarn add ---
+mkdir "$TMP/yd" && cd "$TMP/yd"
+git init -q -b main && git config user.email t@t && git config user.name t
+printf '{ "name":"yd","private":true,"dependencies":{"minimist":"0.0.8"},"scripts":{"test":"exit 0"} }' > package.json
+yarn install --silent >/dev/null 2>&1
+printf 'node_modules/\n' > .gitignore
+git add -A && git commit -qm init
+node "$BW" audit >/dev/null 2>&1 || { echo "FAIL: yarn audit run failed"; exit 1; }
+BR=$(git branch --list 'bumpwright/minimist-*' --format='%(refname:short)' | head -1)
+[ -n "$BR" ] || { echo "FAIL: no yarn direct branch"; exit 1; }
+git show "$BR:package.json" | grep -Eq '"minimist": ?"\^?0\.2\.[1-9]' || { echo "FAIL: yarn direct not bumped: $(git show $BR:package.json)"; exit 1; }
+git log "$BR" -1 --pretty=%B | grep -q "Security: fixes http" || { echo "FAIL: no advisory in yarn commit"; exit 1; }
+echo "YARN DIRECT OK"
+
+# --- yarn classic: transitive vuln pinned via resolutions with --overrides ---
+mkdir "$TMP/yt" && cd "$TMP/yt"
+git init -q -b main && git config user.email t@t && git config user.name t
+printf '{ "name":"yt","private":true,"dependencies":{"mkdirp":"0.5.1"},"scripts":{"test":"exit 0"} }' > package.json
+yarn install --silent >/dev/null 2>&1
+printf 'node_modules/\n' > .gitignore
+git add -A && git commit -qm init
+node "$BW" audit --overrides >/dev/null 2>&1 || { echo "FAIL: yarn overrides run failed"; exit 1; }
+git rev-parse --verify -q bumpwright/security-overrides >/dev/null || { echo "FAIL: no yarn overrides branch"; exit 1; }
+git show bumpwright/security-overrides:package.json | python3 -c "import json,sys; p=json.load(sys.stdin); assert 'minimist' in p.get('resolutions',{}), p.get('resolutions'); print('resolutions ok')" || { echo "FAIL: resolutions not written"; exit 1; }
+echo "YARN OVERRIDES OK"

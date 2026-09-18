@@ -286,6 +286,10 @@ function fixMode(argv) {
     a.test = "npm run build";
     console.log(`→ no test script; using the build as the gate: ${a.test}`);
   }
+  if (a.test === "npm test" && t && /react-scripts test/.test(t)) {
+    a.test = "CI=true npm test -- --watchAll=false";
+    console.log(`→ react-scripts detected; using CI-safe gate: ${a.test}`);
+  }
   console.log(`→ baseline: ${a.test}`);
   const base = run(a.test);
   if (base.code !== 0) { console.error(base.out.slice(-2000)); die(`the gate "${a.test}" is already red — fix that first`); }
@@ -306,7 +310,8 @@ function fixMode(argv) {
     run("git checkout -- .");
     die("npm audit fix broke the gate — reverted, nothing shipped");
   }
-  run("git add package.json package-lock.json npm-shrinkwrap.json 2>/dev/null");
+  for (const f of ["package.json", "package-lock.json", "npm-shrinkwrap.json"])
+    if (fs.existsSync(f)) run(`git add -- "${f}"`);
   const msg = "Apply npm audit fix (non-breaking security updates)\n\nAll changes stay within existing semver ranges; the test gate ran green.\n\nAutomated by bumpwright.";
   if (run(`git commit -m "${msg}"`).code !== 0) die("git commit failed");
   console.log("✓ committed npm audit fix behind a green gate");
@@ -373,6 +378,9 @@ function main() {
     if ((!t || /no test specified/i.test(t)) && pj.scripts && pj.scripts.build) {
       a.test = `${a.pm.test.split(" ")[0]} run build`;
       console.log(`→ no test script; using the build as the gate: ${a.test}`);
+    } else if (t && /react-scripts test/.test(t)) {
+      a.test = "CI=true npm test -- --watchAll=false";
+      console.log(`→ react-scripts detected; using CI-safe gate: ${a.test}`);
     }
   }
 

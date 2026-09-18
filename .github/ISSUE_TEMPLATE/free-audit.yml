@@ -1,0 +1,26 @@
+name: Free security audit
+description: bumpwright probes your repo's vulnerable dependencies and opens green upgrade PRs where tests pass
+title: "[audit] OWNER/REPO"
+labels: [free-audit]
+body:
+  - type: input
+    id: repo
+    attributes:
+      label: Repository
+      description: Public repo you own (owner/name). The service verifies you are the owner.
+      placeholder: yourname/yourrepo
+    validations:
+      required: true
+  - type: input
+    id: test
+    attributes:
+      label: Test command (optional)
+      description: Defaults to npm test, or your build script if there are no tests.
+  - type: markdown
+    attributes:
+      value: |
+        **What happens:** bumpwright clones your repo, finds vulnerabilities whose fix
+        needs a real version bump, applies each bump on its own branch, and runs your
+        tests. Green → a PR appears on your repo with the advisory links. Red → you get
+        a findings comment here instead. No AI edits in this free tier — it's a pure
+        "would this upgrade break me?" probe. Public repos only.

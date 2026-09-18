@@ -239,7 +239,11 @@ function collectPnpmAudit(counts) {
     const floors = [...String(adv.patched_versions || "").matchAll(/>=\s*([\d.]+)/g)].map((x) => x[1]);
     const m = floors.length ? [null, floors.sort((a, b) => (isDowngrade(a, b) ? -1 : 1)).pop()] : null;
     if (!m) { counts.transitive++; continue; }
-    const cur = (adv.findings && adv.findings[0] && adv.findings[0].version) || installedVersion(name);
+    // an advisory can list several installed instances; guard against the HIGHEST,
+    // or a fix for an old copy masquerades as an upgrade (Trilium: pdfjs-dist 6.3->6.2)
+    const found = (adv.findings || []).map((x) => x.version).filter(Boolean)
+      .sort((a, b) => (isDowngrade(a, b) ? -1 : 1));
+    const cur = found.pop() || installedVersion(name);
     if (cur && isDowngrade(m[1], cur)) { counts.downgrades++; continue; }
     addTarget(majors, name, m[1], adv.severity || "security", [adv.url].filter(Boolean), counts);
     const entry = majors.get(name);

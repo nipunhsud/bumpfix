@@ -32,7 +32,10 @@ jobs:
           [ -n "$REPO" ] || say "Couldn't find an owner/name repo in the request."
           OWNER=${REPO%%/*}
           if [ "$OWNER" != "$AUTHOR" ]; then
-            say "This free service only audits repos you own (requested \`$REPO\`, you are \`$AUTHOR\`)."
+            # org repos: allow requests from PUBLIC members of the owning org
+            if ! gh api "orgs/$OWNER/public_members/$AUTHOR" --silent 2>/dev/null; then
+              say "This service audits repos you own, or org repos where you're a public member of \`$OWNER\` (you are \`$AUTHOR\`). Make your org membership public, or ask an org member to file the request."
+            fi
           fi
           gh api "repos/$REPO" --jq .private | grep -q false || say "Public repos only."
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
